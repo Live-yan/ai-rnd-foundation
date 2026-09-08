@@ -1,0 +1,22 @@
+digraph platform {
+ graph [rankdir=TB, bgcolor="white", fontname="Noto Sans CJK SC", nodesep=.30, ranksep=.52, pad=.20];
+ node [shape=box, style="rounded,filled", fontname="Noto Sans CJK SC", fontsize=11, color="#CAD5DE", fillcolor="#F1F5F8", margin=".17,.13"];
+ edge [fontname="Noto Sans CJK SC", fontsize=9, color="#61798E", arrowsize=.65];
+ user [label="用户\n选择模板 · 输入需求 · 审批", fillcolor="#DFECEA"];
+ api [label="FastapiAdmin + Factory API\nVue 3 · 原鉴权 · owner 校验"];
+ pg [label="PostgreSQL\n需求快照 · spec digest · outbox"];
+ temporal [label="Temporal\n规划 → 审批 → 生成 → 验证 → 打包", fillcolor="#DCE9F4"];
+ planner [label="LangGraph\ndraft / validate（有界）"];
+ llm [label="LiteLLM → 模型\n结构化 JSON，不执行模型代码"];
+ mcp [label="ToolHive → Serena\n固定模板的只读符号上下文"];
+ generator [label="可信模板生成器\n固定 FastapiAdmin + 业务扩展"];
+ docs [label="Architecture Pack\nOpenSpec · C4 DSL · ER · diagrams"];
+ verify [label="Verifier\n源码 + 业务契约 + OpenSpec"];
+ cube [label="Docker / Cube（可选）\n隔离的固定验证命令"];
+ zip [label="交付 ZIP + SHA\n源码 · 迁移 · 启动 · 质量报告", fillcolor="#DFECEA"];
+ ide [label="新目录启动\nVS Code / IDEA / Coder"];
+ user -> api -> pg -> temporal;
+ temporal -> planner; planner -> llm; planner -> mcp;
+ temporal -> generator; generator -> docs; generator -> verify; verify -> cube;
+ verify -> zip; zip -> ide;
+}

@@ -1,0 +1,11 @@
+{
+  "python": "3.13.5",
+  "root": "/mnt/data/ai-rnd-foundation",
+  "env_exists": false,
+  "upstream_downloaded_on_host": false,
+  "checks": {
+    "docker": "missing",
+    "git": "found",
+    "uv": "found"
+  }
+}

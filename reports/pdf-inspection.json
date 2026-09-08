@@ -1,0 +1,16 @@
+{
+  "pages": 38,
+  "renderer": "WeasyPrint; sampled with pdftoppm and PyMuPDF",
+  "out_of_margin_text_boxes": [],
+  "sample_pages_rendered": [
+    1,
+    2,
+    3,
+    4,
+    9,
+    16,
+    24,
+    38
+  ],
+  "scope": "documentation only"
+}

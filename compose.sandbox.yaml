@@ -1,0 +1,10 @@
+# Opt-in LOCAL DEVELOPMENT ONLY. Docker socket access is effectively host-admin access.
+# Do not attach this override to a public/multi-tenant service.
+services:
+  worker:
+    user: "0:0"
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      FACTORY_DOCKER_HOST_DATA_DIR: ${FACTORY_DOCKER_HOST_DATA_DIR:?Use the actual WSL host data path}

@@ -1,0 +1,5 @@
+# Docker verifier image. A Cube template must additionally include Cube's envd/agent base requirements.
+FROM python:3.12-slim-bookworm
+USER 65534:65534
+WORKDIR /workspace
+CMD ["python", "--version"]

@@ -1,0 +1,23 @@
+name: Foundation contracts
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.10'
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y graphviz
+      - run: uv sync --extra dev
+      - run: uv run pytest --junitxml=reports/junit-ci.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: contract-results
+          path: reports/
+  # Deliberately not claiming a real Docker + model + external-services CI run.
+  # Add protected-environment jobs only after secrets, budgets, and sandbox policy are configured.

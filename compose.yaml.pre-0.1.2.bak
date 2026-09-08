@@ -1,0 +1,117 @@
+# DEVELOPMENT ONLY. No Kubernetes. Model gateway is optional; core requires no model key in demo mode.
+x-app: &app
+  image: ai-rnd-foundation:0.1.0
+  build: .
+  env_file: .env
+  environment: &app-env
+    FACTORY_DATABASE_URL: ${FACTORY_DATABASE_URL:?Run python3 scripts/init_env.py first}
+    FACTORY_DATA_DIR: /app/data
+    FACTORY_UPSTREAM_DIR: /app/.vendor/FastapiAdmin
+    FACTORY_TEMPORAL_ADDRESS: temporal:7233
+    FACTORY_TEMPORAL_NAMESPACE: default
+    FACTORY_TASK_QUEUE: ai-rnd-v1
+    ENVIRONMENT: prod
+    DATABASE_TYPE: postgres
+    DATABASE_HOST: postgres
+    DATABASE_PORT: 5432
+    DATABASE_USER: factory
+    DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+    DATABASE_NAME: factory
+    REDIS_HOST: redis
+    REDIS_PORT: 6379
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    SERVER_HOST: 0.0.0.0
+    SERVER_PORT: 8000
+    DEBUG: "False"
+    DEMO_ENABLE: "False"
+    OPENAI_API_KEY: ""
+  volumes: ["./data:/app/data"]
+  extra_hosts: ["host.docker.internal:host-gateway"]
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: factory
+      POSTGRES_DB: factory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate .env first}
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-alpine
+    environment: {REDIS_PASSWORD: "${REDIS_PASSWORD:?Generate .env first}"}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  temporal:
+    image: temporalio/temporal:1.8.3
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--db-filename", "/data/temporal.db", "--ui-port", "8233"]
+    ports: ["127.0.0.1:7233:7233", "127.0.0.1:8233:8233"]
+    volumes: ["temporal-data:/data"]
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+  init-data:
+    <<: *app
+    user: "0:0"
+    command: ["sh", "-c", "chown 10001:10001 /app/data && chmod 750 /app/data"]
+    environment: {}
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      init-data: {condition: service_completed_successfully}
+  api:
+    <<: *app
+    command: ["api"]
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/factory-api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+  worker:
+    <<: *app
+    command: ["worker"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      temporal: {condition: service_healthy}
+    restart: unless-stopped
+  litellm:
+    profiles: ["ai"]
+    # Mutable stable tag is explicitly recorded; pin a resolved digest after local verification.
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    env_file: .env
+    ports: ["127.0.0.1:4000:4000"]
+    volumes: ["./integrations/litellm/config.yaml:/app/config.yaml:ro"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    restart: unless-stopped
+  structurizr:
+    profiles: ["architecture"]
+    image: structurizr/structurizr:2026.06.28-noble
+    command: ["local"]
+    ports: ["127.0.0.1:8080:8080"]
+    volumes: ["./architecture:/usr/local/structurizr"]
+volumes:
+  postgres-data:
+  redis-data:
+  temporal-data:
