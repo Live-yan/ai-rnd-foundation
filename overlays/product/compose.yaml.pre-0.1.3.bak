@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile.delivery
     env_file: .env
     environment:
-      ENVIRONMENT: dev
+      ENVIRONMENT: prod
       DATABASE_TYPE: postgres
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
@@ -43,8 +43,6 @@ services:
       SERVER_PORT: 8000
       DEBUG: "False"
       DEMO_ENABLE: "False"
-      SCHEDULER_ALLOW_CODE_EXEC: "False"
-      IP_LOCATION_ENABLE: "False"
       OPENAI_API_KEY: ""
     ports: ["127.0.0.1:8010:8000"]
     depends_on:

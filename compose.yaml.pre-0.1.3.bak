@@ -10,7 +10,7 @@ x-app: &app
     FACTORY_TEMPORAL_ADDRESS: temporal:7233
     FACTORY_TEMPORAL_NAMESPACE: default
     FACTORY_TASK_QUEUE: ai-rnd-v1
-    ENVIRONMENT: dev
+    ENVIRONMENT: prod
     DATABASE_TYPE: postgres
     DATABASE_HOST: postgres
     DATABASE_PORT: 5432
@@ -24,8 +24,6 @@ x-app: &app
     SERVER_PORT: 8000
     DEBUG: "False"
     DEMO_ENABLE: "False"
-    SCHEDULER_ALLOW_CODE_EXEC: "False"
-    IP_LOCATION_ENABLE: "False"
     OPENAI_API_KEY: ""
   volumes: ["./data:/app/data"]
   extra_hosts: ["host.docker.internal:host-gateway"]
