@@ -12,9 +12,10 @@ WORKDIR /web
 RUN npm install --global pnpm@9.15.3 @fission-ai/openspec@1.12.0
 COPY --from=upstream /app/runtime/FastapiAdmin/frontend/web/ ./
 RUN if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
-RUN pnpm exec vite build --mode production --base=/web/ && \
+RUN pnpm exec vite build --mode production && \
     test -s src/types/auto-imports.d.ts && test -s src/types/components.d.ts && \
-    pnpm exec vue-tsc --noEmit
+    pnpm exec vue-tsc --noEmit && \
+    node -e 'const h=require("fs").readFileSync("dist/index.html","utf8"); if(!h.includes("/api/v1/web/")) throw new Error("frontend assets were not built for /api/v1/web/")'
 
 FROM python:3.12-slim-bookworm
 COPY --from=ghcr.io/astral-sh/uv:0.12.10 /uv /uvx /usr/local/bin/
