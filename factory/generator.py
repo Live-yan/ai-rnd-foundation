@@ -45,7 +45,7 @@ def migration_source(spec: ProjectSpec) -> str:
 
 def _generate_product(spec: ProjectSpec, upstream: Path, destination: Path,
                      *, diagrams_required: bool = True, test_fixture: bool = False) -> dict:
-    from scripts.bootstrap import check_contract, copy_source, add_route
+    from scripts.bootstrap import check_contract, copy_source, add_frontend_route
     check_contract(upstream)
     receipt = upstream / '.factory-upstream.json'
     if not test_fixture:
@@ -61,7 +61,14 @@ def _generate_product(spec: ProjectSpec, upstream: Path, destination: Path,
         shutil.rmtree(stage)
     try:
         copy_source(upstream, stage)
-        add_route(stage, 'business', 'BusinessConsole', ROOT / 'overlays/product/BusinessConsole.vue')
+        add_frontend_route(
+            stage,
+            'business',
+            'BusinessConsole',
+            ROOT / 'overlays/product/BusinessConsole.vue',
+            title='业务管理',
+            icon='ri:database-2-line',
+        )
         put(stage, 'backend/business_runtime.py', (ROOT / 'factory/product_runtime.py').read_text().replace(
             'from .schemas import', 'from business_schema import'))
         put(stage, 'backend/business_schema.py', (ROOT / 'factory/schemas.py').read_text())
@@ -76,7 +83,8 @@ def _generate_product(spec: ProjectSpec, upstream: Path, destination: Path,
         put(stage, 'scripts/verify_business.py', (ROOT / 'scripts/verify_business.py').read_text())
         put(stage, '.dockerignore', '.git\n.venv\n**/.venv\n**/node_modules\n**/__pycache__\n.env\nbackend/env/.env.dev\nbackend/env/.env.prod\n')
         put(stage, '.gitignore', '.env\nbackend/env/.env.dev\nbackend/env/.env.prod\n.venv/\n**/.venv/\n**/node_modules/\n**/__pycache__/\n')
-        put(stage, 'frontend/web/.env.production.example', 'VITE_APP_ENV=prod\nVITE_API_URL=/\nVITE_APP_TITLE=Generated Product\n')
+        put(stage, 'frontend/web/.env.production.example',
+            'VITE_APP_ENV=prod\nVITE_ACCESS_MODE=mixed\nVITE_API_URL=/\nVITE_APP_TITLE=Generated Product\n')
         put(stage, 'backend/business-alembic.ini', '[alembic]\nscript_location = business_migrations\nprepend_sys_path = .\n')
         put(stage, 'backend/business_migrations/env.py',
             'from alembic import context\nfrom delivery_db import make_engine\n\n'
@@ -158,8 +166,8 @@ docker compose up --build -d
 docker compose logs -f app
 ```
 
-浏览器打开 http://localhost:8010/web/，按上游 README 的初始化账号说明登录，立刻修改初始密码。
-然后访问 http://localhost:8010/web/#/business 。不要把此本地开发配置暴露到公网。
+浏览器打开 http://localhost:8010/api/v1/web/，按上游 README 的初始化账号说明登录，立刻修改初始密码。
+然后从左侧菜单进入“业务管理”，或直接访问 http://localhost:8010/api/v1/web/#/business 。不要把此本地开发配置暴露到公网。
 端口冲突时修改 compose.yaml 中左侧的 8010；数据库 55433、Redis 56380 也可能需要修改。
 第一次构建需要下载上游锁定依赖和镜像，源码在 ZIP 中但依赖不是离线内置的。
 
@@ -169,7 +177,8 @@ docker compose logs -f app
 2. 执行 `python3 scripts/init_product.py`；执行 `docker compose up -d postgres redis`。
 3. 执行 `cd backend && uv sync && cd ..`。
 4. 构建前端：`cd frontend/web && corepack pnpm install --frozen-lockfile`（没有锁文件时用 `pnpm install`），
-   先执行 `pnpm exec vite build --mode production --base=/web/` 以生成自动导入类型声明，确认 `src/types/auto-imports.d.ts` 与 `src/types/components.d.ts` 已生成，再执行 `pnpm exec vue-tsc --noEmit`。
+   将 `.env.production.example` 复制为 `.env.production`，补充 `VITE_BASE_URL=/api/v1/web/` 和 `VITE_APP_BASE_API=/api/v1`，
+   再执行 `pnpm exec vite build --mode production` 以生成自动导入类型声明，确认 `src/types/auto-imports.d.ts` 与 `src/types/components.d.ts` 已生成，最后执行 `pnpm exec vue-tsc --noEmit`。
 5. 将 `frontend/web/dist` 复制到 `backend/dist`，回到项目根目录执行：
    `uv run --project backend python scripts/run_local.py`。
 6. 在浏览器中打开上述地址。该脚本自动加载 backend/env/.env.dev，并先应用业务迁移。
