@@ -2,7 +2,7 @@
 set -eu
 cd /app
 case "${1:-api}" in
-  migrate) exec python -m alembic -c /app/alembic.ini upgrade head ;;
+  migrate) exec python /app/scripts/migrate_control_plane.py ;;
   worker) exec python -m factory.worker ;;
   api)
     cd /app/runtime/FastapiAdmin/backend
