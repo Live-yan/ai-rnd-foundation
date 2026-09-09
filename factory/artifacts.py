@@ -19,32 +19,53 @@ def put(root: Path, name: str, text: str):
 
 
 def dsl_quote(value: str) -> str:
-    # Only allow data, never a DSL directive or external include.
-    value = ''.join(' ' if ord(c) < 32 else c for c in value)
-    return '"' + value.replace('\\', '/').replace('"', "'") + '"'
+    # Model labels are data, not directives or environment-variable substitutions.
+    import unicodedata
+    value = ''.join(' ' if unicodedata.category(c).startswith('C') or c in {'\u2028', '\u2029'} else c for c in value)
+    value = value.replace('\\', '/').replace('"', "'").replace('${', '$ {')
+    return '"' + value + '"'
 
 
 def c4_dsl(spec: ProjectSpec) -> str:
-    lines = [f'workspace {dsl_quote(spec.title)} "Generated architecture description" {{',
-             '  model {', '    user = person "User" "Authenticated application user"',
-             f'    system = softwareSystem {dsl_quote(spec.title)} "FastapiAdmin-based generated product" {{',
-             '      web = container "Web UI" "Forms, lists and administration" "Vue 3 / TypeScript"',
-             '      api = container "Application API" "Authentication and business endpoints" "FastAPI / Python" {',
-             '        auth = component "Authentication adapter" "Reuses upstream JWT, Redis session and live user checks" "FastapiAdmin"']
+    # Use explicit property lines instead of positional optional arguments. This
+    # keeps the generated DSL unambiguous and leaves all labels inside quotes.
+    lines = ['workspace {', f'  name {dsl_quote(spec.title)}',
+             '  description "Generated architecture description"', '  model {',
+             '    user = person "User"',
+             f'    product = softwareSystem {dsl_quote(spec.title)} {{',
+             '      description "FastapiAdmin-based generated product"',
+             '      web = container "Web UI" {',
+             '        description "Forms, lists and administration"',
+             '        technology "Vue 3 / TypeScript"', '      }',
+             '      api = container "Application API" {',
+             '        description "Authentication and business endpoints"',
+             '        technology "FastAPI / Python"',
+             '        auth = component "Authentication adapter" {',
+             '          description "Reuses upstream JWT, Redis session and live user checks"',
+             '          technology "FastapiAdmin"', '        }']
     for entity in spec.entities:
-        lines.append(f'        c_{entity.name} = component {dsl_quote(entity.label)} "Typed owner-scoped CRUD" "SQLAlchemy Core"')
-    lines += ['      }', '      db = container "Database" "Admin and generated business data" "PostgreSQL"',
-              '      redis = container "Session cache" "Upstream sessions and caching" "Redis"', '    }',
+        # Labels need not be unique in ProjectSpec, but C4 component names must be.
+        lines += [f'        c_{entity.name} = component {dsl_quote(entity.label + " (" + entity.name + ")")} {{',
+                  '          description "Typed owner-scoped CRUD"',
+                  '          technology "SQLAlchemy Core"', '        }']
+    lines += ['      }', '      db = container "Database" {',
+              '        description "Admin and generated business data"',
+              '        technology "PostgreSQL"', '      }',
+              '      redis = container "Session cache" {',
+              '        description "Upstream sessions and caching"',
+              '        technology "Redis"', '      }', '    }',
               '    user -> web "Uses" "HTTP (local development)"',
               '    web -> api "Calls authenticated APIs" "HTTP / JSON"',
               '    api -> db "Reads and writes" "SQL"',
               '    api -> redis "Validates sessions" "Redis protocol"',
-              '    auth -> db "Checks current user" "SQL"', '    auth -> redis "Checks session" "Redis protocol"']
+              '    auth -> db "Checks current user" "SQL"',
+              '    auth -> redis "Checks session" "Redis protocol"']
     for entity in spec.entities:
         lines += [f'    c_{entity.name} -> auth "Requires identity"',
                   f'    c_{entity.name} -> db "CRUD biz_{entity.name}" "SQL"']
-    lines += ['  }', '  views {', '    systemContext system "C1" {', '      include *', '      autoLayout lr', '    }',
-              '    container system "C2" {', '      include *', '      autoLayout lr', '    }',
+    lines += ['  }', '  views {', '    systemContext product "C1" {',
+              '      include *', '      autoLayout lr', '    }',
+              '    container product "C2" {', '      include *', '      autoLayout lr', '    }',
               '    component api "C3" {', '      include *', '      autoLayout lr', '    }', '  }', '}']
     return '\n'.join(lines) + '\n'
 

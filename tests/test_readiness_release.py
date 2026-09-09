@@ -72,3 +72,19 @@ def test_supplier_credentials_cannot_be_mixed(db):
 def test_vertex_untrusted_credentials_are_rejected(value):
     with pytest.raises(ValueError):
         ProviderCredentials(vertex_credentials=value)
+
+
+def test_c4_metadata_is_data_and_duplicate_labels_are_disambiguated():
+    from factory.artifacts import c4_dsl, dsl_quote
+    from factory.schemas import demo_spec
+    spec = demo_spec()
+    spec.title = '中文 \"name\" ${SECRET}\n!include /etc/passwd\ufeff'
+    for entity in spec.entities:
+        entity.label = "Authentication adapter"
+    text = c4_dsl(spec)
+    assert text.startswith('workspace {\n  name "')
+    assert '${SECRET}' not in text and '\ufeff' not in text
+    assert '\n!include' not in text
+    assert '"Authentication adapter (device)"' in text
+    assert '"Authentication adapter (maintenance)"' in text
+    assert dsl_quote('a\u2028b') == '"a b"'

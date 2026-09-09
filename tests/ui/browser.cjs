@@ -28,7 +28,7 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
     await page.locator('.el-dialog__headerbtn').last().click();await page.waitForTimeout(1500);
     assert.deepEqual(await page.evaluate(()=>window.__calls),[], 'Closing login must prevent delayed authorization creation');
     await page.goto('http://127.0.0.1:4173/#/factory-toolchain');
-    for(let i=0;i<11;i++){await page.locator('.tool-card').nth(i).getByRole('button').click();await page.getByRole('button',{name:'保存配置'}).waitFor();await page.locator('.el-drawer__close-btn').last().click();}
+    for(let i=0;i<11;i++){await page.locator('.tool-card').nth(i).getByRole('button').click();await page.getByRole('button',{name:'保存配置',exact:true}).waitFor();await page.locator('.el-drawer__close-btn').last().click();}
     fs.writeFileSync('ui-reports/layout.json',JSON.stringify({scope:'actual_components_with_API_fixtures',receipts,credential_switch:'passed',closed_authorization:'passed',configuration_drawers:11},null,2));
   }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exit(1)});
