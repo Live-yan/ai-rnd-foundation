@@ -62,6 +62,7 @@ jobs:
         run: |
           docker run -d --name rnd-browser -p 127.0.0.1:4173:4173 -v "$PWD/tests/ui:/checks:ro" ai-rnd-frontend-smoke node /checks/serve.cjs
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:4173/ >/dev/null
           NODE_PATH="$RUNNER_TEMP/rnd-browser/node_modules" node tests/ui/browser.cjs
       - name: Browser harness diagnostics
         if: failure()
@@ -114,8 +115,12 @@ jobs:
           set -euo pipefail
           dsl="$(sudo find data/runs -path '*/analysis/architecture/workspace.dsl' -print -quit)"
           test -n "$dsl"
-          dir="$(realpath "$(dirname "$dsl")")"
-          docker run --rm --network none --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=1g --pids-limit=256 --tmpfs /tmp:rw,nosuid,size=128m --mount "type=bind,source=$dir,target=/usr/local/structurizr,readonly" --entrypoint java structurizr/structurizr:2026.06.28-noble -jar /usr/local/structurizr.war validate -w /usr/local/structurizr/workspace.dsl
+          # Stage only the generated DSL, not credentials or the private run tree.
+          dir="$(mktemp -d "$RUNNER_TEMP/rnd-c4.XXXXXX")"
+          trap 'rm -rf "$dir"' EXIT
+          sudo install -m 0644 "$dsl" "$dir/workspace.dsl"
+          sudo chown "$(id -u):$(id -g)" "$dir/workspace.dsl"
+          docker run --rm --user "$(id -u):$(id -g)" --network none --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=1g --pids-limit=256 --tmpfs /tmp:rw,nosuid,size=128m --mount "type=bind,source=$dir,target=/usr/local/structurizr,readonly" --entrypoint java structurizr/structurizr:2026.06.28-noble -jar /usr/local/structurizr.war validate -w /usr/local/structurizr/workspace.dsl
           echo '{"structurizr_parser":"passed","source":"generated_analysis"}' | sudo tee data/ci-reports/structurizr.json >/dev/null
       - name: Build distributable Coder and Cube verifier images
         run: |

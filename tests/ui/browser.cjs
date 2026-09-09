@@ -2,11 +2,20 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
 (async()=>{
   fs.mkdirSync('ui-reports',{recursive:true});const browser=await chromium.launch({headless:true});
   const pages=['/factory','/factory-providers','/factory-toolchain'];const receipts=[];
+  const diagnostics=[]; let currentPage; let currentRoute='startup';
+  async function newPage(viewport) {
+    const page=await browser.newPage({viewport,deviceScaleFactor:1}); currentPage=page;
+    page.on('pageerror',error=>diagnostics.push({route:currentRoute,type:'pageerror',message:String(error)}));
+    page.on('console',message=>{if(message.type()==='error') diagnostics.push({route:currentRoute,type:'console',message:message.text()});});
+    page.on('requestfailed',request=>diagnostics.push({route:currentRoute,type:'requestfailed',url:request.url(),error:request.failure()}));
+    page.on('response',response=>{if(response.status()>=400) diagnostics.push({route:currentRoute,type:'http',url:response.url(),status:response.status()});});
+    return page;
+  }
   try{
     for(const [width,height] of [[1366,768],[1280,720],[820,760],[390,780]]){
-      const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:1});
+      const page=await newPage({width,height});
       for(const route of pages){
-        await page.goto('http://127.0.0.1:4173/#'+route);await page.locator('.rnd-embedded').waitFor();
+        currentRoute=route; await page.goto('http://127.0.0.1:4173/#'+route);await page.locator('.rnd-embedded').waitFor();
         await page.waitForTimeout(900);
         const metrics=await page.evaluate(()=>{const p=document.querySelector('.rnd-embedded'),r=p.getBoundingClientRect();return {bottom:r.bottom,width:document.documentElement.scrollWidth,viewport:innerWidth,height:innerHeight,errors:window.__errors||[]};});
         assert(metrics.bottom<=height+2,`${route} bottom overflow ${JSON.stringify(metrics)}`);
@@ -18,7 +27,7 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
       }
       await page.close();
     }
-    const page=await browser.newPage({viewport:{width:1280,height:720}});
+    const page=await newPage({width:1280,height:720}); currentRoute='configuration-actions';
     await page.goto('http://127.0.0.1:4173/#/factory-providers');await page.getByRole('button',{name:'添加模型',exact:true}).click();
     await page.locator('input[data-testid="api-key"], [data-testid="api-key"] input').fill('fixture-private-key');
     await page.locator('[data-testid="provider-select"]').click();await page.getByRole('option',{name:'Anthropic',exact:true}).click();
@@ -30,5 +39,15 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
     await page.goto('http://127.0.0.1:4173/#/factory-toolchain');
     for(let i=0;i<11;i++){await page.locator('.tool-card').nth(i).getByRole('button').click();await page.getByRole('button',{name:'保存配置',exact:true}).waitFor();await page.locator('.el-drawer__close-btn').last().click();}
     fs.writeFileSync('ui-reports/layout.json',JSON.stringify({scope:'actual_components_with_API_fixtures',receipts,credential_switch:'passed',closed_authorization:'passed',configuration_drawers:11},null,2));
-  }finally{await browser.close()}
+  }catch(error){
+    if(currentPage && !currentPage.isClosed()) {
+      await currentPage.screenshot({path:'ui-reports/failure.png',fullPage:true}).catch(()=>{});
+      fs.writeFileSync('ui-reports/failure.html',await currentPage.content().catch(()=>''));
+      diagnostics.push({route:currentRoute,type:'vue-errors',errors:await currentPage.evaluate(()=>window.__errors||[]).catch(()=>[])});
+    }
+    console.error(JSON.stringify(diagnostics,null,2)); throw error;
+  }finally{
+    fs.writeFileSync('ui-reports/diagnostics.json',JSON.stringify(diagnostics,null,2));
+    await browser.close();
+  }
 })().catch(e=>{console.error(e);process.exit(1)});
