@@ -45,4 +45,4 @@ def validate_model_origin(provider: str, base_url: str, settings: Settings) -> N
             return
     allowed = {origin(value) for value in settings.model_allowed_origins}
     if selected not in allowed:
-        raise HTTPException(422, "自定义模型地址未获管理员批准。请在工具链中心的 LiteLLM 设置中批准其 origin，或修改 FACTORY_MODEL_ALLOWED_ORIGINS 后重启")
+        raise HTTPException(422, "自定义模型地址未获管理员批准。请由管理员修改 FACTORY_MODEL_ALLOWED_ORIGINS 后重启 API/worker；当前页面不修改出口白名单")

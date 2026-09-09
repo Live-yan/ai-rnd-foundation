@@ -41,7 +41,10 @@ export function useEmbeddedViewport() {
 }
 
 export function openService(url: string) {
-  const target = new URL(url, window.location.origin);
-  if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) return;
-  window.open(target.href, "_blank", "noopener,noreferrer");
+  if (!url || url.startsWith("//") || /[\\\x00-\x1f\x7f]/.test(url)) return;
+  try {
+    const target = new URL(url, window.location.origin);
+    if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) return;
+    window.open(target.href, "_blank", "noopener,noreferrer");
+  } catch { /* Invalid service URLs are rejected, never executed. */ }
 }

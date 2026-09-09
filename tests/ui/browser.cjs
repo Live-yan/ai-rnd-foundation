@@ -20,9 +20,9 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
     }
     const page=await browser.newPage({viewport:{width:1280,height:720}});
     await page.goto('http://127.0.0.1:4173/#/factory-providers');await page.getByRole('button',{name:'添加模型',exact:true}).click();
-    await page.locator('[data-testid="api-key"] input').fill('fixture-private-key');
+    await page.locator('input[data-testid="api-key"], [data-testid="api-key"] input').fill('fixture-private-key');
     await page.locator('[data-testid="provider-select"]').click();await page.getByRole('option',{name:'Anthropic',exact:true}).click();
-    assert.equal(await page.locator('[data-testid="api-key"] input').inputValue(),'');
+    assert.equal(await page.locator('input[data-testid="api-key"], [data-testid="api-key"] input').inputValue(),'');
     await page.getByRole('button',{name:'取消',exact:true}).click();
     await page.locator('.provider-row').nth(1).getByRole('button',{name:'网页登录'}).click();
     await page.locator('.el-dialog__headerbtn').last().click();await page.waitForTimeout(1500);

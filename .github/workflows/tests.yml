@@ -115,7 +115,7 @@ jobs:
           dsl="$(sudo find data/runs -path '*/analysis/architecture/workspace.dsl' -print -quit)"
           test -n "$dsl"
           dir="$(realpath "$(dirname "$dsl")")"
-          docker run --rm --network none --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=1g --pids-limit=256 --tmpfs /tmp:rw,nosuid,size=128m --mount "type=bind,source=$dir,target=/usr/local/structurizr,readonly" structurizr/structurizr:2026.06.28-noble validate -workspace workspace.dsl
+          docker run --rm --network none --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=1g --pids-limit=256 --tmpfs /tmp:rw,nosuid,size=128m --mount "type=bind,source=$dir,target=/usr/local/structurizr,readonly" --entrypoint java structurizr/structurizr:2026.06.28-noble -jar /usr/local/structurizr.war validate -w /usr/local/structurizr/workspace.dsl
           echo '{"structurizr_parser":"passed","source":"generated_analysis"}' | sudo tee data/ci-reports/structurizr.json >/dev/null
       - name: Build distributable Coder and Cube verifier images
         run: |

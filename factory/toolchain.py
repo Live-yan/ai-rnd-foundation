@@ -94,7 +94,8 @@ def validate_structurizr(analysis_root: Path, run_id: str, settings: Settings) -
         "docker", "run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop=ALL",
         "--memory=1g", "--cpus=1", "--pids-limit=256", "--tmpfs", "/tmp:rw,nosuid,size=128m",
         "--security-opt=no-new-privileges", "--mount", f"type=bind,source={host_arch},target=/usr/local/structurizr,readonly",
-        settings.structurizr_image, "validate", "-workspace", "workspace.dsl",
+        "--entrypoint", "java", settings.structurizr_image, "-jar", "/usr/local/structurizr.war",
+        "validate", "-w", "/usr/local/structurizr/workspace.dsl",
     ]
     try:
         result = subprocess.run(args, text=True, capture_output=True, timeout=90, env={"PATH": os.environ.get("PATH", "")})

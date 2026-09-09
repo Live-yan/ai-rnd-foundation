@@ -52,12 +52,14 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     def _success(data=None, msg: str = "操作成功", status_code: int = 200):
         if response_factory is not None:
-            return response_factory(data=data, msg=msg, status_code=status_code)
-        return JSONResponse(jsonable_encoder({"code": 0, "msg": msg, "data": data, "success": True}), status_code=status_code)
+            response = response_factory(data=data, msg=msg, status_code=status_code)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return JSONResponse(jsonable_encoder({"code": 0, "msg": msg, "data": data, "success": True}), status_code=status_code, headers={"Cache-Control": "no-store"})
 
     def _response(request: Request, data=None, msg: str = "操作成功"):
         if _legacy(request):
-            return data
+            return JSONResponse(jsonable_encoder(data), headers={"Cache-Control": "no-store"}, status_code=request.scope["route"].status_code or 200)
         return _success(data, msg, request.scope["route"].status_code or 200)
 
     @core.get("/health")
@@ -104,7 +106,9 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     def reset_tool_config(request: Request, tool: str, revision: int, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
         if not admin:
             raise HTTPException(403, "Administrator required")
-        return _response(request, config_service.reset(tool, revision), "已恢复 .env / 镜像默认配置")
+        # Old reset deletes the revision row and permits stale-version reuse.
+        # Do not expose it until the storage-level fix can be reviewed and deployed.
+        raise HTTPException(409, "恢复默认暂不可用：旧实现会回退配置版本。请刷新当前配置后修改并保存；现有凭据和数据不变")
 
     @core.post("/providers/export")
     def export_providers(request: Request, actor: str = Depends(actor_dependency)):
@@ -122,7 +126,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     @core.post("/providers/{provider_id}/discover")
     async def discover_saved_provider(request: Request, provider_id: str, actor: str = Depends(actor_dependency)):
         profile = await run_in_threadpool(providers.runtime, actor, provider_id)
-        models = await discover_models(settings, profile.provider, profile.base_url, profile.api_key)
+        models = await discover_models(config_service.effective(), profile.provider, profile.base_url, profile.api_key)
         return _response(request, {"models": models})
 
     @core.get("/providers/catalog")
@@ -157,7 +161,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     @core.post("/providers/discover")
     async def discover_provider_models(request: Request, value: DiscoverInput, actor: str = Depends(actor_dependency)):
-        models = await discover_models(settings, value.provider, value.base_url, value.api_key)
+        models = await discover_models(config_service.effective(), value.provider, value.base_url, value.api_key)
         return _response(request, {"models": models}, f"已发现 {len(models)} 个模型")
 
     @core.post("/projects", status_code=201)
@@ -186,6 +190,8 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
         standard = not _legacy(request)
         if standard and not value.expected_revision:
             raise HTTPException(428, "请提交当前项目 expected_revision；刷新需求分析后再启动")
+        if value.provider == "demo" and not value.provider_id and not settings.allow_legacy_demo:
+            raise HTTPException(422, "固定 Demo 仅用于显式启用的本地测试；请先选择模型完成需求澄清")
         if standard and value.provider == "demo" and not value.provider_id:
             raise HTTPException(422, "新版工作台不允许固定 Demo 冒充 AI 分析；请配置真实模型供应商")
         if value.provider_id:

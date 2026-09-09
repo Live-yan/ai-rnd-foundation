@@ -207,7 +207,7 @@ export const FactoryAPI = {
   },
   async testProvider(id: string) {
     return data<{ ok: boolean; message: string }>(await request({
-      url: `${API_PATH}/providers/${id}/test`, method: "post", timeout: 120000,
+      url: `${API_PATH}/providers/${id}/test`, method: "post", timeout: 210000,
     }));
   },
   async toolchain() {

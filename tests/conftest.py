@@ -45,7 +45,7 @@ def fake_upstream(tmp_path):
 @pytest.fixture
 def platform(db,tmp_path,fake_upstream):
     settings = Settings(_env_file=None,data_dir=tmp_path / 'data',upstream_dir=fake_upstream,
-                        openspec_required=False,diagrams_required=False)
+                        openspec_required=False,diagrams_required=False,allow_legacy_demo=True)
     settings.ensure_paths()
     app = FastAPI()
     def actor(x_actor: str | None = Header(None)):
