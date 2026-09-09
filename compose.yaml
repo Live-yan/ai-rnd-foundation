@@ -41,7 +41,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - postgres-socket:/var/run/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U factory -d factory"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -63,7 +63,7 @@ services:
       - -ceu
       - |
         echo "Synchronizing local PostgreSQL role credentials with .env..."
-        psql -h /var/run/postgresql -U factory -d postgres -v ON_ERROR_STOP=1 -v password="$$POSTGRES_PASSWORD" -c "ALTER ROLE factory WITH PASSWORD :'password';" >/dev/null
+        printf '%s\n' '\getenv password POSTGRES_PASSWORD' "ALTER ROLE factory WITH PASSWORD :'password';" | psql -h /var/run/postgresql -U factory -d postgres -v ON_ERROR_STOP=1 >/dev/null
         PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U factory -d factory -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null
         echo "PostgreSQL credential sync complete."
     depends_on:
