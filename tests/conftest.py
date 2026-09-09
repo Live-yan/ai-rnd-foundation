@@ -29,6 +29,18 @@ def fake_upstream(tmp_path):
               'frontend/web/src/router/index.ts':'export const router = {addRoute: (value: unknown) => value};\n',
               'frontend/web/src/router/MenuProcessor.ts':'import type { AppRouteRecord } from "@/types/router";\nexport const builtinFrontendRoutes: AppRouteRecord[] = [];\n',
               'frontend/web/package.json':'{"name":"test-fixture","version":"0.0.0"}\n'}
+    values.update({
+        'frontend/web/src/router/route-loader.ts': (
+            '  private handleFirstLevelLeaf(route: AppRouteRecord): Record<string, any> {\n'
+            '      redirect: fullMenuPath,\n'
+            '          path: fullMenuPath.replace(/^\\//, ""),\n'
+        ),
+        'frontend/web/src/utils/sys/index.ts': 'fetch(`/?_t=${Date.now()}`, { cache: "no-store" })',
+        'frontend/web/src/utils/sse/index.ts': (
+            'export function httpEndpoint(endpoint: string): string {\n'
+            '  return endpoint.replace(/^ws/, "http");\n}'
+        ),
+    })
     for name,text in values.items():
         path = root / name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text(text)
     return root
