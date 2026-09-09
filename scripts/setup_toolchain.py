@@ -1,4 +1,6 @@
 """Idempotent local tool defaults; never overwrite an existing nonempty setting or generate model keys."""
+from __future__ import annotations
+
 from pathlib import Path
 import argparse
 

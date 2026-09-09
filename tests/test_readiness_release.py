@@ -91,3 +91,17 @@ def test_c4_metadata_is_data_and_duplicate_labels_are_disambiguated():
     assert '"Authentication adapter (device)"' in text
     assert '"Authentication adapter (maintenance)"' in text
     assert dsl_quote('a\u2028b') == '"a b"'
+
+
+def test_cube_image_uses_locked_dependencies_and_system_python_without_tls_bypass():
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "integrations/cube/Dockerfile.fullstack").read_text()
+    assert "UV_PYTHON_DOWNLOADS=never" in dockerfile
+    assert "--python /usr/bin/python3.12" in dockerfile
+    assert "--frozen --no-dev" in dockerfile
+    assert "/app/runtime/combined/uv.lock" in dockerfile
+    assert "uv python install" not in dockerfile
+    assert "allow-insecure-host" not in dockerfile
+    assert not any(line.startswith(("CMD ", "ENTRYPOINT ")) for line in dockerfile.splitlines())
+    workflow = (root / ".github/workflows/tests.yml").read_text()
+    assert "bash scripts/verify_cube_image.sh" in workflow

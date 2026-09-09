@@ -142,6 +142,8 @@ jobs:
           docker run --rm --network none --entrypoint sh ai-rnd-coder:0.2.0 -c 'test "$(id -u)" != 0 && python3 --version && uv --version && node --version && pnpm --version'
           docker build -f integrations/cube/Dockerfile.fullstack -t ai-rnd-cube-verifier:ci .
           docker run --rm --entrypoint /opt/rnd-runtime/.venv/bin/python ai-rnd-cube-verifier:ci -c 'import sqlalchemy,redis,fastapi;from pathlib import Path;assert Path("/opt/rnd-verifier/full_stack.py").is_file()'
+      - name: Run offline product acceptance inside the actual Cube image
+        run: bash scripts/verify_cube_image.sh
       - name: Verify optional tool consoles can start without model credentials
         run: |
           docker builder prune -af
