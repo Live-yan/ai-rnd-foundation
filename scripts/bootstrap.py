@@ -61,22 +61,28 @@ def add_frontend_route(
     *,
     title: str,
     icon: str = 'ri:code-box-line',
+    page_segment: str = 'workspace',
+    page_title: str | None = None,
 ) -> None:
-    """Install a first-class mixed-mode frontend route.
+    """Install a first-class mixed-mode frontend route without a redirect loop.
 
     FastapiAdmin authorizes navigation against MenuProcessor's menu list. A direct
-    ``router.addRoute`` call can render a component, but the global route guard will
-    still reject its path and the sidebar will never see it. Register extensions via
-    ``builtinFrontendRoutes`` so menu rendering, permission validation and
-    RouteRegistry all consume the same route definition.
+    ``router.addRoute`` call bypasses that list, while a first-level leaf route such
+    as ``/factory`` hits RouteTransformer.handleFirstLevelLeaf(), whose parent route
+    redirects to the same path. Use the same catalog + child-page shape as upstream
+    menus: ``/<name>`` is the visible catalog and ``/<name>/<page_segment>`` is the
+    component page. RouteTransformer then redirects the catalog to the child by name.
     """
+    if not page_segment or '/' in page_segment:
+        raise ValueError('page_segment must be one non-empty path segment')
+
     view_dir = target / f'frontend/web/src/views/{name}'
     view_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, view_dir / f'{component_name}.vue')
 
     menu_path = target / 'frontend/web/src/router/MenuProcessor.ts'
     text = menu_path.read_text(encoding='utf-8')
-    marker = f'// AI-RND-FRONTEND-ROUTE:{name}:v2'
+    marker = f'// AI-RND-FRONTEND-ROUTE:{name}:v3'
     if marker in text:
         return
 
@@ -84,20 +90,35 @@ def add_frontend_route(
     if needle not in text:
         raise RuntimeError('builtinFrontendRoutes extension point changed; refusing to patch blindly')
 
+    child_title = page_title or title
     route = (
         f'{marker}\n'
         'export const builtinFrontendRoutes: AppRouteRecord[] = [\n'
         '  {\n'
         f'    path: {json.dumps("/" + name, ensure_ascii=False)},\n'
         f'    name: {json.dumps("rnd-" + name, ensure_ascii=False)},\n'
-        f'    component: {json.dumps(name + "/" + component_name, ensure_ascii=False)},\n'
         '    meta: {\n'
         f'      title: {json.dumps(title, ensure_ascii=False)},\n'
         f'      icon: {json.dumps(icon, ensure_ascii=False)},\n'
         '      hidden: false,\n'
         '      isHide: false,\n'
+        '      alwaysShow: true,\n'
         '      keepAlive: true,\n'
         '    },\n'
+        '    children: [\n'
+        '      {\n'
+        f'        path: {json.dumps(page_segment, ensure_ascii=False)},\n'
+        f'        name: {json.dumps("rnd-" + name + "-" + page_segment, ensure_ascii=False)},\n'
+        f'        component: {json.dumps(name + "/" + component_name, ensure_ascii=False)},\n'
+        '        meta: {\n'
+        f'          title: {json.dumps(child_title, ensure_ascii=False)},\n'
+        f'          icon: {json.dumps(icon, ensure_ascii=False)},\n'
+        '          hidden: false,\n'
+        '          isHide: false,\n'
+        '          keepAlive: true,\n'
+        '        },\n'
+        '      },\n'
+        '    ],\n'
         '  },\n'
         '];'
     )
@@ -145,6 +166,7 @@ def assemble(source: Path, destination: Path, *, replace: bool = False) -> None:
         'FactoryConsole',
         ROOT / 'overlays/platform/FactoryConsole.vue',
         title='AI 软件开发平台',
+        page_title='开发工作台',
     )
     # Build-only configuration: no credentials and no cross-origin API.
     # copy_source intentionally excludes upstream .env files, so access mode must be explicit.
