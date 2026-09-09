@@ -10,9 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 RESERVED = {"id", "owner_id", "created_at", "updated_at", "metadata", "schema", "type", "user"}
+# Keep in sync with factory.providers.catalog.PROVIDER_CATALOG ids.
 ProviderKind = Literal[
     "openai", "anthropic", "azure_openai", "google", "deepseek", "groq",
     "openrouter", "ollama", "mistral", "xai", "litellm_proxy", "custom_openai",
+    "cerebras", "together_ai", "fireworks_ai", "perplexity", "sambanova",
+    "vertex_ai", "bedrock", "cohere", "huggingface", "moonshot", "zai",
+    "minimax", "volcengine", "dashscope", "nvidia_nim", "deepinfra",
+    "hyperbolic", "nebius", "lambda", "github", "vllm", "lm_studio",
+    "xinference", "wandb", "watsonx", "scaleway", "cloudflare_workers",
+    "aiml", "novita", "nscale", "xiaomi_mimo", "siliconflow", "featherless",
+    "anyscale", "databricks", "snowflake", "galadriel", "nano_gpt",
 ]
 PipelineMode = Literal["core", "full"]
 
@@ -152,6 +160,12 @@ class ProviderUpdate(StrictModel):
     api_version: str | None = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9.\-]*$")
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=256, le=128000)
+
+
+class DiscoverInput(StrictModel):
+    provider: ProviderKind
+    base_url: str = Field(default="", max_length=500)
+    api_key: str = Field(default="", max_length=4096)
 
 
 class ClarifyInput(StrictModel):

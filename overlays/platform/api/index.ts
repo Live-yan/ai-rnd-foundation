@@ -59,6 +59,37 @@ export interface ProviderInput {
   temperature: number;
   max_tokens: number;
 }
+export interface ProviderCatalogModel {
+  id: string;
+  label: string;
+}
+export interface ProviderCatalogItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  base_url: string;
+  default_base_url: string;
+  requires_api_key: boolean;
+  requires_base_url: boolean;
+  supports_discover: boolean;
+  docs: string;
+  models: ProviderCatalogModel[];
+  litellm_prefix: string;
+  is_local: boolean;
+  extra_hint: string;
+  discover_path: string;
+}
+export interface ProviderCatalog {
+  categories: string[];
+  providers: ProviderCatalogItem[];
+  quick_start: { provider: string; model: string; name: string }[];
+}
+export interface DiscoverInput {
+  provider: string;
+  base_url: string;
+  api_key?: string;
+}
 export interface ToolchainItem {
   id: string;
   name: string;
@@ -126,6 +157,14 @@ export const FactoryAPI = {
   },
   async listProviders() {
     return data<ProviderProfile[]>(await request({ url: `${API_PATH}/providers`, method: "get" }));
+  },
+  async providerCatalog() {
+    return data<ProviderCatalog>(await request({ url: `${API_PATH}/providers/catalog`, method: "get" }));
+  },
+  async discoverProviderModels(body: DiscoverInput) {
+    return data<{ models: ProviderCatalogModel[] }>(await request({
+      url: `${API_PATH}/providers/discover`, method: "post", timeout: 60000, data: body,
+    }));
   },
   async createProvider(body: ProviderInput) {
     return data<ProviderProfile>(await request({ url: `${API_PATH}/providers`, method: "post", data: body }));

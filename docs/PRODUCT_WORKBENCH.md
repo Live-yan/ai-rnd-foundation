@@ -55,7 +55,7 @@ Worker 不加载整个 FastapiAdmin Web 应用，所以领域模型/服务保留
 
 ## 三、先配置模型，再分析需求
 
-在“模型供应商”新增配置。支持 OpenAI、Anthropic、Azure OpenAI、Gemini、DeepSeek、Groq、OpenRouter、Ollama、Mistral、xAI、LiteLLM Proxy 和自定义 OpenAI-compatible。
+在“模型供应商”新增配置。目录内置 50 家 LiteLLM 路由供应商（OpenAI、Anthropic、Azure OpenAI、Gemini、DeepSeek、Groq、OpenRouter、Ollama、Mistral、xAI、Kimi、智谱、通义、小米 MiMo、硅基流动、Together、Fireworks、Cerebras、vLLM、LM Studio、LiteLLM Proxy 与自定义 OpenAI-compatible 等），页面提供分类浏览、常用模型一键填入，以及对 OpenAI-compatible / Ollama 端点的在线模型发现。
 
 填写真实模型 ID、API Key、可选 Base URL、Temperature、Max Tokens。Azure 另外填写 API Version 和部署名。OpenRouter 的 `anthropic/…` 等原生模型 ID 会保留，由 LiteLLM 添加外层供应商路由前缀。自定义 API 的带 `/` 模型名不会误切换到另一个供应商。
 

@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from ..config import Settings
 from ..database import Database, ProviderProfile
 from ..schemas import ProviderInput, ProviderUpdate
+from .catalog import REQUIRE_BASE_URL
 from .endpoint_policy import validate_model_origin
 
 
@@ -55,7 +56,7 @@ def decrypt_secret(value: str, settings: Settings) -> str:
 
 def validate_endpoint(provider: str, base_url: str) -> str:
     value = base_url.strip()
-    if provider in {"azure_openai", "litellm_proxy", "custom_openai", "ollama"} and not value:
+    if provider in REQUIRE_BASE_URL and not value:
         raise HTTPException(422, f"{provider} requires an explicit Base URL")
     if not value:
         return ""

@@ -81,9 +81,33 @@ def test_explicit_provider_never_falls_back_or_crosses_owner(db, settings):
     ("custom_openai", "team/model", "openai/team/model"),
     ("anthropic", "anthropic/example", "anthropic/example"),
     ("azure_openai", "deployment", "azure/deployment"),
+    ("dashscope", "qwen-plus", "dashscope/qwen-plus"),
+    ("xiaomi_mimo", "mimo-v2.5", "xiaomi_mimo/mimo-v2.5"),
+    ("siliconflow", "Qwen/Qwen3-235B-A22B", "openai/Qwen/Qwen3-235B-A22B"),
 ])
 def test_vendor_selection_is_not_changed_by_model_prefix(provider, model, expected):
     assert litellm_model(replace(profile(), provider=provider, model=model)) == expected
+
+
+def test_provider_catalog_covers_kinds_and_offers_quick_start():
+    from factory.providers.catalog import PROVIDER_CATALOG, PROVIDER_PREFIX, catalog_payload
+    from factory.schemas import ProviderKind
+    import typing
+    kinds = set(typing.get_args(ProviderKind))
+    ids = {item["id"] for item in PROVIDER_CATALOG}
+    assert kinds == ids
+    assert ids == set(PROVIDER_PREFIX)
+    assert len(ids) >= 40
+    payload = catalog_payload()
+    assert len(payload["providers"]) == len(ids)
+    assert payload["categories"]
+    assert any(item["provider"] == "openai" for item in payload["quick_start"])
+    assert any(item["id"] == "ollama" and item["is_local"] for item in payload["providers"])
+
+
+def test_hosted_provider_origin_is_allowed_without_env_allowlist():
+    validate_model_origin("deepseek", "https://api.deepseek.com/v1", Settings(_env_file=None))
+    validate_model_origin("dashscope", "https://dashscope.aliyuncs.com/compatible-mode/v1", Settings(_env_file=None))
 
 
 def test_custom_endpoint_is_administrator_approved(settings):

@@ -8,17 +8,7 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException
 
 from ..config import Settings
-
-HOSTED_ORIGINS = {
-    "openai": {"https://api.openai.com"},
-    "anthropic": {"https://api.anthropic.com"},
-    "google": {"https://generativelanguage.googleapis.com"},
-    "deepseek": {"https://api.deepseek.com"},
-    "groq": {"https://api.groq.com"},
-    "openrouter": {"https://openrouter.ai"},
-    "mistral": {"https://api.mistral.ai"},
-    "xai": {"https://api.x.ai"},
-}
+from .catalog import HOSTED_ORIGINS
 
 
 def origin(value: str) -> str:

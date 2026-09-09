@@ -8,6 +8,7 @@ from typing import Any
 
 from ..config import Settings
 from ..schemas import ProjectSpec
+from .catalog import JSON_FORMAT_PROVIDERS, NO_KEY_PROVIDERS, PROVIDER_PREFIX
 from .registry import ProviderRuntime
 
 SYSTEM_PROMPT = """You are the planning engine of an AI software R&D platform.
@@ -18,22 +19,9 @@ Use lowercase snake_case identifiers and keep the graph of reference fields acyc
 Return one JSON object and no markdown.
 """
 
-_PROVIDER_PREFIX = {
-    "openai": "openai",
-    "anthropic": "anthropic",
-    "azure_openai": "azure",
-    "google": "gemini",
-    "deepseek": "deepseek",
-    "groq": "groq",
-    "openrouter": "openrouter",
-    "ollama": "ollama",
-    "mistral": "mistral",
-    "xai": "xai",
-}
-
 
 def litellm_model(profile: ProviderRuntime) -> str:
-    prefix = _PROVIDER_PREFIX.get(profile.provider, "openai")
+    prefix = PROVIDER_PREFIX.get(profile.provider, "openai")
     model = profile.model.strip()
     if model.startswith(prefix + "/"):
         return model
@@ -82,13 +70,13 @@ class ModelGateway:
             from litellm import acompletion
         except ImportError as exc:
             raise RuntimeError("LiteLLM SDK is unavailable; rebuild the platform image after updating dependencies") from exc
-        if not profile.api_key and profile.provider not in {"ollama", "custom_openai", "litellm_proxy"}:
+        if not profile.api_key and profile.provider not in NO_KEY_PROVIDERS:
             raise ValueError("The selected cloud provider requires its own API key")
         if profile.provider == "azure_openai" and not profile.api_version:
             raise ValueError("Azure OpenAI requires an explicit API version")
         kwargs: dict[str, Any] = {
             "model": litellm_model(profile),
-            "custom_llm_provider": _PROVIDER_PREFIX.get(profile.provider, "openai"),
+            "custom_llm_provider": PROVIDER_PREFIX.get(profile.provider, "openai"),
             "api_key": profile.api_key or "local-no-key",
             "num_retries": 0,
             "drop_params": True,
@@ -104,7 +92,7 @@ class ModelGateway:
             kwargs["api_version"] = profile.api_version
         if profile.base_url:
             kwargs["api_base"] = profile.base_url.rstrip("/")
-        if profile.provider in {"openai", "azure_openai", "deepseek", "groq", "openrouter", "xai", "litellm_proxy", "custom_openai"}:
+        if profile.provider in JSON_FORMAT_PROVIDERS:
             kwargs["response_format"] = {"type": "json_object"}
         try:
             response = await acompletion(**kwargs)

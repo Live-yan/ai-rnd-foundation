@@ -4,6 +4,7 @@ No credentials are required for the public template. This is intentionally an ON
 from __future__ import annotations
 import argparse
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -14,7 +15,17 @@ OMIT = {'.git', '.venv', 'node_modules', '__pycache__', '.pytest_cache', '.ruff_
 
 
 def run(args: list[str], cwd: Path) -> str:
-    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=300)
+    env = os.environ.copy()
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    # Ubuntu 20.04 Git does not support GIT_CONFIG_COUNT on all versions.
+    # Trust only this invocation's repository, without changing global config.
+    if args and args[0] == 'git':
+        args = [
+            'git', '-c', f'safe.directory={cwd.resolve().as_posix()}',
+            '-c', 'core.autocrlf=false', '-c', 'core.eol=lf',
+            '-c', 'core.fileMode=false', *args[1:],
+        ]
+    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, timeout=300, env=env)
     if result.returncode:
         raise RuntimeError(f'{args[0]} failed: {result.stderr[-1800:]}')
     return result.stdout.strip()
@@ -197,8 +208,10 @@ def fetch_upstream(target: Path) -> None:
         actual = run(['git', 'rev-parse', 'HEAD'], target)
         if actual != MANIFEST['commit']:
             raise RuntimeError('Existing .vendor commit differs. Preserve it and use a fresh directory.')
-        if run(['git', 'status', '--porcelain', '--untracked-files=no'], target):
-            raise RuntimeError('Pristine template contains tracked modifications; refusing to reuse it.')
+        dirty = run(['git', 'status', '--porcelain', '--untracked-files=no'], target)
+        if dirty:
+            raise RuntimeError('Pristine template contains tracked modifications; refusing to reuse it. '
+                               'Preserve local edits and use a fresh upstream directory.')
         check_contract(target)
         return
     stage = target.with_name(target.name + '.incoming')

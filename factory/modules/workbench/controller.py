@@ -11,9 +11,20 @@ from sqlalchemy import select, text
 
 from factory.config import ROOT, Settings
 from factory.database import Database, Run
+from factory.providers.catalog import catalog_payload
 from factory.providers.registry import ProviderService
+from factory.providers.discover import discover_models
 from .crud import Repository
-from .schema import ApprovalInput, ClarifyInput, MessageInput, ProjectInput, ProviderInput, ProviderUpdate, RunInput
+from .schema import (
+    ApprovalInput,
+    ClarifyInput,
+    DiscoverInput,
+    MessageInput,
+    ProjectInput,
+    ProviderInput,
+    ProviderUpdate,
+    RunInput,
+)
 from .service import WorkbenchService
 from factory.security import file_sha256
 from factory.handoff import verify_source_ticket
@@ -64,6 +75,10 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     def toolchain(request: Request, actor: str = Depends(actor_dependency)):
         return _response(request, toolchain_status(settings, sum(1 for item in providers.list(actor) if item["enabled"])), "工具链状态获取成功")
 
+    @core.get("/providers/catalog")
+    def provider_catalog(request: Request, actor: str = Depends(actor_dependency)):
+        return _response(request, catalog_payload(), "模型供应商目录获取成功")
+
     @core.get("/providers")
     def list_providers(request: Request, actor: str = Depends(actor_dependency)):
         return _response(request, providers.list(actor), "模型供应商列表获取成功")
@@ -89,6 +104,11 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     async def test_provider(request: Request, provider_id: str, actor: str = Depends(actor_dependency)):
         result = await service.test_provider(actor, provider_id)
         return _response(request, result, "模型连通性测试成功")
+
+    @core.post("/providers/discover")
+    async def discover_provider_models(request: Request, value: DiscoverInput, actor: str = Depends(actor_dependency)):
+        models = await discover_models(settings, value.provider, value.base_url, value.api_key)
+        return _response(request, {"models": models}, f"已发现 {len(models)} 个模型")
 
     @core.post("/projects", status_code=201)
     def create_project(request: Request, value: ProjectInput, actor: str = Depends(actor_dependency)):
