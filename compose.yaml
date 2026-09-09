@@ -37,13 +37,38 @@ services:
       POSTGRES_DB: factory
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate .env first}
     ports: ["127.0.0.1:55432:5432"]
-    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - postgres-socket:/var/run/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
       interval: 5s
       timeout: 5s
       retries: 30
     restart: unless-stopped
+  # Existing PostgreSQL volumes keep the role password that was set when the
+  # cluster was first initialized. If .env is regenerated during a source
+  # upgrade, synchronize the local development role through the Unix socket
+  # before any remote/TCP client (Alembic, FastapiAdmin) is allowed to connect.
+  # This changes credentials only; it never drops databases, tables, or volumes.
+  postgres-auth-sync:
+    image: postgres:17-bookworm
+    user: "postgres"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Generate .env first}
+    volumes:
+      - postgres-socket:/var/run/postgresql
+    command:
+      - sh
+      - -ceu
+      - |
+        echo "Synchronizing local PostgreSQL role credentials with .env..."
+        psql -h /var/run/postgresql -U factory -d postgres -v ON_ERROR_STOP=1 -v password="$$POSTGRES_PASSWORD" -c "ALTER ROLE factory WITH PASSWORD :'password';" >/dev/null
+        PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U factory -d factory -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null
+        echo "PostgreSQL credential sync complete."
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
   redis:
     image: redis:7.4-alpine
     environment: {REDIS_PASSWORD: "${REDIS_PASSWORD:?Generate .env first}"}
@@ -84,7 +109,7 @@ services:
     <<: *app
     command: ["migrate"]
     depends_on:
-      postgres: {condition: service_healthy}
+      postgres-auth-sync: {condition: service_completed_successfully}
       init-data: {condition: service_completed_successfully}
   api:
     <<: *app
@@ -124,5 +149,6 @@ services:
     volumes: ["./architecture:/usr/local/structurizr"]
 volumes:
   postgres-data:
+  postgres-socket:
   redis-data:
   temporal-data:
