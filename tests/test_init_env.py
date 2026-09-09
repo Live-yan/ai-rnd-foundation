@@ -49,6 +49,21 @@ def test_repair_moves_conflicting_file_without_deleting_it(tmp_path: Path, monke
     assert (tmp_path / ".env").is_file()
 
 
+def test_repair_current_failure_shape_preserves_existing_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_root(monkeypatch, tmp_path)
+    env = tmp_path / ".env"
+    env.write_text("POSTGRES_PASSWORD=keep-this\nFACTORY_CREDENTIAL_ENCRYPTION_KEY=existing\n", encoding="utf-8")
+    (tmp_path / "data").write_text("stale bind-mount object", encoding="utf-8")
+
+    init_env.main(["--repair-data"])
+
+    assert (tmp_path / "data").is_dir()
+    assert "POSTGRES_PASSWORD=keep-this" in env.read_text(encoding="utf-8")
+    backups = list(tmp_path.glob("data.conflict-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "stale bind-mount object"
+
+
 def test_repair_preserves_broken_symlink_as_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _use_root(monkeypatch, tmp_path)
     data = tmp_path / "data"
