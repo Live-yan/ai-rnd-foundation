@@ -21,7 +21,7 @@ from factory.toolchain import require_full_toolchain, toolchain_status
 
 
 def _legacy(request: Request) -> bool:
-    return request.scope["route"].path.startswith("/factory-api/")
+    return bool(getattr(request.state, "factory_legacy", False))
 
 
 def create_router(db: Database, settings: Settings, actor_dependency: Callable, *,
@@ -214,6 +214,13 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
                 raise HTTPException(409, "Artifact integrity check failed")
             return FileResponse(artifact, media_type="application/zip", headers={"Cache-Control": "no-store", "X-Content-SHA256": row.artifact_sha256})
 
-    router.include_router(core, prefix="/factory")
-    router.include_router(core, prefix="/factory-api", include_in_schema=False)
+    def response_mode(legacy: bool):
+        # Included-router internals differ across FastAPI versions. Bind the mode
+        # explicitly instead of inferring it from scope["route"].path/root_path.
+        def mark(request: Request):
+            request.state.factory_legacy = legacy
+        return Depends(mark)
+
+    router.include_router(core, prefix="/factory", dependencies=[response_mode(False)])
+    router.include_router(core, prefix="/factory-api", dependencies=[response_mode(True)], include_in_schema=False)
     return router

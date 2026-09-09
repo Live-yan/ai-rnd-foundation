@@ -179,7 +179,11 @@ def test_coder_reuses_workspace_but_requires_import_receipt(settings):
     calls = []
     def reply(request):
         calls.append(request.method)
-        return httpx.Response(200, json=data)
+        if request.url.path == "/api/v2/workspaces":
+            assert "include_agent_metadata:rnd_source_sha256" in request.url.params["q"]
+            return httpx.Response(200, json={"workspaces": [data]})
+        # The detail API deliberately omits metadata, as the real server does.
+        return httpx.Response(200, json={**data, "latest_build": {"status": "running", "resources": []}})
     client = CoderClient(settings, httpx.MockTransport(reply))
     source = {"url": "https://platform.example/factory/transfer/run", "token": "capability", "sha256": "a" * 64}
     with pytest.raises(RuntimeError, match="not confirmed"):

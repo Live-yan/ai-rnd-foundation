@@ -1,6 +1,7 @@
 """Build one combined uv project without silently relaxing upstream constraints."""
 import json
 import tomllib
+import hashlib
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
@@ -10,7 +11,9 @@ dependencies = sorted(set(upstream['project']['dependencies'] + ours['project'][
                           ours['project']['optional-dependencies']['cube']))
 output = root / 'runtime/combined'
 output.mkdir(parents=True,exist_ok=True)
-text = '[project]\nname="ai-rnd-host"\nversion="0.1.0"\nrequires-python=">=3.12,<3.13"\ndependencies=[\n'
+text = '[project]\nname="ai-rnd-host"\nversion="0.2.0"\nrequires-python=">=3.12,<3.13"\ndependencies=[\n'
 text += ''.join('  ' + json.dumps(d) + ',\n' for d in dependencies) + ']\n'
 (output / 'pyproject.toml').write_text(text)
-print('Wrote runtime/combined/pyproject.toml. Run uv lock --project runtime/combined, then uv sync --frozen.')
+print('Combined dependency manifest SHA-256:', hashlib.sha256(text.encode()).hexdigest())
+print(text)
+print('Run uv lock --directory runtime/combined, then uv sync --directory runtime/combined --frozen.')

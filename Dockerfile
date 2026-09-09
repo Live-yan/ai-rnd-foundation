@@ -39,8 +39,8 @@ COPY locks/ locks/
 COPY --from=upstream /app/.vendor/ .vendor/
 COPY --from=upstream /app/runtime/ runtime/
 RUN python scripts/resolve_host.py && \
-    if [ -f locks/host.uv.lock ]; then cp locks/host.uv.lock runtime/combined/uv.lock && uv sync --project runtime/combined --frozen --no-dev; \
-    else uv lock --project runtime/combined && uv sync --project runtime/combined --frozen --no-dev; fi
+    if [ -f locks/host.uv.lock ]; then cp locks/host.uv.lock runtime/combined/uv.lock && uv sync --directory runtime/combined --frozen --no-dev; \
+    else uv lock --directory runtime/combined && uv sync --directory runtime/combined --frozen --no-dev; fi
 COPY --from=frontend /web/dist/ runtime/FastapiAdmin/backend/dist/
 ENV PATH=/app/runtime/combined/.venv/bin:$PATH ENVIRONMENT=prod
 RUN useradd --create-home --uid 10001 factory && mkdir -p /app/data && chown -R factory:factory /app

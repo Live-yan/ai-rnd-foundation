@@ -79,6 +79,17 @@ class CoderClient:
                 return result
             deadline = time.monotonic() + s.coder_import_timeout
             while True:
+                # The single-workspace endpoint does not populate agent metadata.
+                # Explicitly expand the receipt on the list API, then match the exact ID.
+                response = await request("GET", "/api/v2/workspaces", params={
+                    "q": f"owner:me name:{name} include_agent_metadata:rnd_source_sha256", "limit": 100,
+                })
+                if response.status_code != 200:
+                    raise RuntimeError(f"Coder metadata lookup returned HTTP {response.status_code}; verify server support for include_agent_metadata")
+                matches = [item for item in response.json().get("workspaces", []) if item.get("id") == data["id"]]
+                if len(matches) != 1:
+                    raise RuntimeError("Coder metadata lookup did not return the requested workspace")
+                data = matches[0]
                 if data.get("template_id") != s.coder_template_id:
                     raise RuntimeError("Coder workspace template mismatch")
                 if self.imported(data, source["sha256"]):
