@@ -14,6 +14,8 @@ COPY --from=upstream /app/runtime/FastapiAdmin/frontend/web/ ./
 RUN grep -q 'AI-RND-FRONTEND-ROUTE:factory:v2' src/router/MenuProcessor.ts && \
     grep -q '^VITE_ACCESS_MODE=mixed$' .env.production
 RUN if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
+COPY tests/frontend_runtime_regression.cjs ./frontend_runtime_regression.cjs
+RUN node frontend_runtime_regression.cjs .
 RUN pnpm exec vite build --mode production && \
     test -s src/types/auto-imports.d.ts && test -s src/types/components.d.ts && \
     pnpm exec vue-tsc --noEmit && \

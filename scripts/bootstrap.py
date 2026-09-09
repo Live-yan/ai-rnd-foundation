@@ -26,6 +26,52 @@ def copy_source(source: Path, destination: Path) -> None:
                 or (n.startswith('.env') and not n.endswith('.example'))
                 or n.endswith(('.key', '.pem', '.pyc'))]
     shutil.copytree(source, destination, ignore=ignore)
+    patch_frontend_runtime(destination)
+
+
+def patch_frontend_runtime(target: Path) -> None:
+    """Repair pinned upstream runtime bugs in assembled copies, never the pristine source."""
+    patches = [
+        (
+            'frontend/web/src/router/route-loader.ts',
+            '  private handleFirstLevelLeaf(route: AppRouteRecord): Record<string, any> {\n',
+            '  private handleFirstLevelLeaf(route: AppRouteRecord): Record<string, any> | null {\n'
+            '    // AI-RND: RouteRegistry already mounts shell children under the root Layout.\n'
+            '    if (this.options.shellChild) return this.buildLeafRoute(route, 0);\n',
+        ),
+        (
+            'frontend/web/src/utils/sys/index.ts',
+            'fetch(`/?_t=${Date.now()}`, { cache: "no-store" })',
+            'fetch(`${import.meta.env.BASE_URL}?_t=${Date.now()}`, { cache: "no-store" })',
+        ),
+        (
+            'frontend/web/src/router/route-loader.ts',
+            '      redirect: fullMenuPath,\n',
+            '      // AI-RND: redirect by child name; its URL stays at the menu path.\n'
+            '      redirect: { name: `${String(route.name) || firstSegment}Child` },\n',
+        ),
+        (
+            'frontend/web/src/router/route-loader.ts',
+            '          path: fullMenuPath.replace(/^\\//, ""),\n',
+            '          path: fullMenuPath,\n',
+        ),
+        (
+            'frontend/web/src/utils/sse/index.ts',
+            'export function httpEndpoint(endpoint: string): string {\n'
+            '  return endpoint.replace(/^ws/, "http");\n}',
+            'export function httpEndpoint(endpoint?: string): string {\n'
+            '  // AI-RND: production is same-origin unless an endpoint is configured.\n'
+            '  return (endpoint || window.location.origin).replace(/^ws/, "http");\n}',
+        ),
+    ]
+    for relative, old, new in patches:
+        path = target / relative
+        text = path.read_text(encoding='utf-8')
+        if new in text:
+            continue
+        if text.count(old) != 1:
+            raise RuntimeError(f'Upstream frontend patch contract changed: {relative}')
+        path.write_text(text.replace(old, new, 1), encoding='utf-8')
 
 
 def frontend_public_base() -> str:
