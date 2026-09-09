@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from .config import Settings
@@ -21,7 +21,7 @@ TOOLS = {
     "fastapiadmin": ("https://fastapiadmin.com", "/api/v1/web/#/", [], "认证、权限与系统参数使用宿主管理页面；框架版本由模板 manifest 固定。"),
     "langgraph": ("https://docs.langchain.com/oss/python/langgraph/overview", "", [("model_timeout", "模型调用总超时（秒）", "number"), ("model_max_tokens", "默认最大输出 tokens", "number")], "进程内需求分析图；模型由模型配置页选择，无需另起 LangGraph 服务。"),
     "litellm": ("https://docs.litellm.ai/docs/", "http://localhost:4000/ui", [], "模型、凭据及 litellm_params 在模型配置页保存；全局网关预算/路由策略可进入 LiteLLM 原生管理台。"),
-    "temporal": ("https://docs.temporal.io", "http://localhost:8233", [], "已预配 Compose Temporal。address/namespace/task_queue 属于 worker 启动参数，修改 .env 后重启 worker。"),
+    "temporal": ("https://docs.temporal.io", "http://localhost:8233", [], "已预配 Compose Temporal。address/namespace/task_queue 属于 worker 启动参数，修改 .env 后重新创建 API/worker 容器；请先处理未完成任务。"),
     "openspec": ("https://github.com/Fission-AI/OpenSpec", "", [("openspec_required", "强制规格校验", "boolean")], "CLI 已装入镜像；完整模式始终要求验证回执。无需服务 URL。"),
     "diagrams": ("https://diagrams.mingrammer.com", "", [("diagrams_required", "强制生成部署图", "boolean")], "diagrams、Graphviz、字体由镜像预装。图文件可在运行详情预览。"),
     "structurizr": ("https://docs.structurizr.com", "http://localhost:8080", [("docker_host_data_dir", "Docker 宿主 data 绝对路径", "text")], "Compose architecture profile 提供浏览器；解析仍用固定镜像。worker 的 Docker socket 是高权限部署选项，不能由页面开启。"),
@@ -43,7 +43,13 @@ class ToolSettingsInput(BaseModel):
 def check_url(value: str, *, browser: bool = False):
     if not value:
         return
-    parsed = urlsplit(value)
+    if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value) or "\\" in value:
+        raise HTTPException(422, "服务地址不能包含空白、控制字符或反斜杠")
+    try:
+        parsed = urlsplit(value)
+        parsed.port  # validate bracketed IPv6 and the port range before saving
+    except ValueError:
+        raise HTTPException(422, "服务地址格式或端口无效") from None
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or (parsed.fragment and not browser):
         raise HTTPException(422, "服务地址必须是无内嵌凭据的 HTTP(S) URL")
 
@@ -52,26 +58,37 @@ class ToolSettingsService:
     def __init__(self, db: Database, defaults: Settings):
         self.db, self.defaults = db, defaults
 
-    def effective(self) -> Settings:
+    def _values(self, row: ToolSetting | None) -> dict:
+        return json.loads(decrypt_secret(row.ciphertext, self.defaults)) if row else {}
+
+    def _effective(self, rows: list[ToolSetting]) -> Settings:
         values = {}
-        with self.db.session() as session:
-            for row in session.scalars(select(ToolSetting)):
-                if row.id in TOOLS:
-                    allowed = {key for key,_,_ in TOOLS[row.id][2]}
-                    stored = json.loads(decrypt_secret(row.ciphertext, self.defaults))
-                    values.update({key:value for key,value in stored.items() if key in allowed})
+        for row in rows:
+            if row.id in TOOLS:
+                allowed = {key for key, _, _ in TOOLS[row.id][2]}
+                values.update({key: value for key, value in self._values(row).items() if key in allowed})
         return self.defaults.model_copy(update=values)
+
+    def effective(self) -> Settings:
+        with self.db.session() as session:
+            return self._effective(list(session.scalars(select(ToolSetting))))
 
     def describe(self, tool: str, *, editable: bool) -> dict:
         if tool not in TOOLS:
             raise HTTPException(404, "Unknown integration")
         docs, web, fields, note = TOOLS[tool]
-        settings = self.effective()
+        # One SELECT: values and revision must be from the same DB snapshot.
+        # Reading them separately lets a stale value acquire a newer revision.
         with self.db.session() as session:
-            row = session.get(ToolSetting, tool)
+            rows = list(session.scalars(select(ToolSetting)))
+            settings = self._effective(rows)
+            row = next((item for item in rows if item.id == tool), None)
             version = row.revision if row else 0
-            if row and row.web_url:
-                web = row.web_url
+            stored = self._values(row)
+            if "web_url" in stored:
+                web = stored["web_url"]  # an explicit empty URL hides the link
+            elif row and row.web_url:
+                web = row.web_url  # compatibility with pre-reset-fix rows
         result = []
         for key, label, kind in fields:
             value = getattr(settings, key)
@@ -99,36 +116,49 @@ class ToolSettingsService:
             if kind in {"text", "url", "secret"} and (not isinstance(value, str) or len(value) > (16000 if kind == "secret" else 1024)):
                 raise HTTPException(422, "Invalid text field")
             if kind == "url":
+                if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value) or "\\" in value:
+                    raise HTTPException(422, "Invalid URL characters")
                 # Relative same-origin routes are allowed only for browser navigation.
                 if not (key == "web_url" and value.startswith("/") and not value.startswith("//")):
                     check_url(value, browser=key == "web_url")
             if key == "docker_host_data_dir" and value and (not value.startswith("/") or "," in value or ".." in value.split("/")):
                 raise HTTPException(422, "Use an absolute Linux/WSL host path without '..' or commas")
+        return self._write(tool, body.expected_revision, dict(body.values))
+
+    def _write(self, tool: str, expected_revision: int, patch: dict, *, reset: bool = False) -> dict:
+        if tool not in TOOLS:
+            raise HTTPException(404, "Unknown integration")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise HTTPException(422, "Expected a nonnegative revision")
+        conflict = "设置已被其他管理员修改，请刷新后重试"
         try:
             with self.db.session() as session:
-                row = session.scalar(select(ToolSetting).where(ToolSetting.id == tool).with_for_update())
+                row = session.get(ToolSetting, tool)
                 revision = row.revision if row else 0
-                if revision != body.expected_revision:
-                    raise HTTPException(409, "设置已被其他管理员修改，请刷新后重试")
-                values = json.loads(decrypt_secret(row.ciphertext, self.defaults)) if row else {}
-                patch = dict(body.values)
-                web_url = patch.pop("web_url", row.web_url if row else "")
-                values.update(patch)
+                if revision != expected_revision:
+                    raise HTTPException(409, conflict)
+                values = {} if reset else self._values(row)
+                if not reset:
+                    values.update(patch)
+                web_url = "" if reset else patch.get("web_url", row.web_url if row else "")
                 encrypted = encrypt_secret(json.dumps(values), self.defaults)
                 if row is None:
-                    row = ToolSetting(id=tool, revision=1, ciphertext=encrypted, web_url=web_url)
-                    session.add(row)
+                    # A reset at revision zero also creates a tombstone. Never
+                    # delete this row or recycle versions (the ABA problem).
+                    session.add(ToolSetting(id=tool, revision=1, ciphertext=encrypted, web_url=web_url))
                 else:
-                    row.revision += 1; row.ciphertext = encrypted; row.web_url = web_url
+                    # SQL-level compare-and-swap works on PostgreSQL and SQLite.
+                    # A SELECT FOR UPDATE alone is not portable to SQLite.
+                    result = session.execute(update(ToolSetting).where(
+                        ToolSetting.id == tool, ToolSetting.revision == expected_revision
+                    ).values(revision=expected_revision + 1, ciphertext=encrypted, web_url=web_url),
+                        execution_options={"synchronize_session": False})
+                    if result.rowcount != 1:
+                        raise HTTPException(409, conflict)
         except IntegrityError:
-            raise HTTPException(409, "设置已被其他管理员修改，请刷新后重试") from None
+            raise HTTPException(409, conflict) from None
         return self.describe(tool, editable=True)
 
-    def reset(self, tool: str, revision: int):
-        with self.db.session() as session:
-            row = session.scalar(select(ToolSetting).where(ToolSetting.id == tool).with_for_update())
-            if row and row.revision != revision:
-                raise HTTPException(409, "Settings revision mismatch")
-            if row:
-                session.delete(row)
-        return self.describe(tool, editable=True)
+    def reset(self, tool: str, revision: int) -> dict:
+        """Remove overrides and secrets, retaining a monotonically increasing version."""
+        return self._write(tool, revision, {}, reset=True)

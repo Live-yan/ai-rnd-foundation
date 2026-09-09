@@ -106,9 +106,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     def reset_tool_config(request: Request, tool: str, revision: int, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
         if not admin:
             raise HTTPException(403, "Administrator required")
-        # Old reset deletes the revision row and permits stale-version reuse.
-        # Do not expose it until the storage-level fix can be reviewed and deployed.
-        raise HTTPException(409, "恢复默认暂不可用：旧实现会回退配置版本。请刷新当前配置后修改并保存；现有凭据和数据不变")
+        return _response(request, config_service.reset(tool, revision), "已恢复环境默认值；已保存覆盖值和凭据已清除")
 
     @core.post("/providers/export")
     def export_providers(request: Request, actor: str = Depends(actor_dependency)):

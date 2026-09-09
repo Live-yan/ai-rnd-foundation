@@ -40,7 +40,7 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
         "toolhive": bool(settings.serena_url),
         "serena": bool(settings.serena_url),
         "cube": bool(settings.cube_api_url and settings.cube_api_key and settings.cube_template),
-        "coder": bool(settings.coder_url and settings.coder_token and settings.coder_template_id and settings.coder_auto_import and settings.coder_factory_url),
+        "coder": bool(settings.coder_url and settings.coder_token and settings.coder_template_id and settings.coder_owner_id and settings.coder_auto_import and settings.coder_factory_url),
     }
     execution = {
         "fastapiadmin": "always", "langgraph": "always", "litellm": "clarify+plan", "temporal": "always",
@@ -91,7 +91,7 @@ def validate_structurizr(analysis_root: Path, run_id: str, settings: Settings) -
         raise RuntimeError("Structurizr requires an absolute Docker host-side path without commas")
     name = "rnd-c4-" + run_id
     args = [
-        "docker", "run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop=ALL",
+        "docker", "run", "--rm", "--name", name, "--user", "10001:10001", "--network", "none", "--read-only", "--cap-drop=ALL",
         "--memory=1g", "--cpus=1", "--pids-limit=256", "--tmpfs", "/tmp:rw,nosuid,size=128m",
         "--security-opt=no-new-privileges", "--mount", f"type=bind,source={host_arch},target=/usr/local/structurizr,readonly",
         "--entrypoint", "java", settings.structurizr_image, "-jar", "/usr/local/structurizr.war",

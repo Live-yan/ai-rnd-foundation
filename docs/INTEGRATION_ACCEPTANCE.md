@@ -52,7 +52,7 @@ docker compose --profile ai up -d litellm
 |---|---|---|
 | FastapiAdmin | 固定模板、认证、权限、布局与接口 | 初始化登录后管理用户；全局工具设置只给超级管理员 |
 | LangGraph | 需求澄清与规划图，结构化校验 | 在模型页选供应商；无需另起 LangGraph 服务 |
-| Temporal | Compose 服务、Outbox、审批 signal | 默认即可；修改地址/命名空间/队列需要重启，不能在运行中随意切换 |
+| Temporal | Compose 服务、Outbox、审批 signal | 默认即可；修改地址/命名空间/队列后重新创建 API/worker；不要在有未完成任务时切换 |
 | OpenSpec | 固定 CLI，proposal/design/tasks/specs，strict 校验 | 镜像内置；完整模式必须有校验回执 |
 | diagrams | Graphviz、部署 SVG、可编辑 Python 源 | 镜像内置；实际输出在规格审阅抽屉 |
 | Structurizr/C4 | 生成 DSL，固定镜像解析与查看服务 | 启用 architecture profile；完整解析按下文配置受控 Docker runner |
@@ -63,7 +63,7 @@ docker compose --profile ai up -d litellm
 
 `/factory-toolchain` 每张卡可打开配置抽屉、文档、服务页面或探针。普通用户不读取敏感字段、不写全局设置。配置加密存于 PostgreSQL，API/活动使用有效设置，不是只保存一个 UI 标记。探针明确区分“依赖可用”“服务可达”和“必须运行验收”，不会偷偷创建计费沙箱。
 
-**当前“恢复默认”已禁用**，因为旧存储实现删除版本行后可能让过期版本再次有效。接口也返回 409，不只是隐藏按钮。正常编辑和保存不受影响；需恢复时填入目标默认值并保存，不删除数据库配置记录。没有将未能写入的存储层改造冒充完成。
+**“恢复默认”保留并递增配置版本号**，只清空本组件在数据库中的覆盖值和凭据，不删除配置版本行。旧页面再次保存或重置返回 409，必须刷新；两个并发写入只有一个成功。恢复后 `.env` 默认值重新生效，因此环境中的凭据仍可能有效。清除浏览器管理页留空可隐藏跳转，恢复默认才恢复预设入口。权限与失败路径都在自动化测试中检查。
 
 ## 4. 内网地址与浏览器地址不要混用
 
@@ -78,7 +78,10 @@ docker compose -f compose.yaml -f compose.tools.yaml --profile tools up -d coder
 - `FACTORY_CODER_URL`：后台请求地址，也可在工具卡设置。
 - `FACTORY_CODER_BROWSER_URL`：运行结果中的浏览器链接前缀，在 `.env` 设置；工具卡的“浏览器管理页”只控制卡片跳转，不会自动修改这个参数。
 - `FACTORY_CODER_FACTORY_URL`：工作区访问平台的根地址，不能填工作区自身 localhost。
-- `CODER_ACCESS_URL`：工作区 Agent 访问 Coder 的地址；本机默认 host.docker.internal:7080，远程部署必须换实际 DNS/HTTPS。
+- `CODER_ACCESS_URL`：用户/浏览器访问 Coder 的公开地址，本机默认 `http://localhost:7080`。
+- Terraform `coder_agent_url`：工作区 Agent 的启动下载及连接地址，本地默认 `http://coder:7080`，由官方 provider 生成启动脚本；不再将 localhost 文本替换为宿主网关。
+
+本地模板的 `network_name=ai-rnd_default` 必须与 Coder 在同一私有网络。这样不需要把仅绑定 127.0.0.1 的管理端口暴露到公网。远程 provisioner 将 `coder_agent_url` 和 `CODER_ACCESS_URL` 配为分别可达的 HTTPS 地址。已有非空 `.env` 不会被 setup 覆盖；若旧版保存的是 `CODER_ACCESS_URL=http://host.docker.internal:7080`，请在本地明确改为浏览器实际可达地址，并重新创建 Coder 容器。
 
 按 `integrations/coder/README.md` 构建工作区镜像并注册 Terraform 模板。服务 Token、Template ID、FastapiAdmin owner ID 由你配置，平台不捏造。若在同一可信开发机使用 Docker provisioner，可显式启用：
 

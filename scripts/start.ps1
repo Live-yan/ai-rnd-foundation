@@ -23,6 +23,9 @@ if ($Fresh) {
 python scripts/init_env.py --repair-data
 if ($LASTEXITCODE -ne 0) { throw "初始化失败。请安装 Python 或改在 WSL 运行。" }
 
+python scripts/setup_toolchain.py
+if ($LASTEXITCODE -ne 0) { throw "工具地址初始化失败，已有凭据未覆盖。" }
+
 docker compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Compose 配置校验失败。" }
 

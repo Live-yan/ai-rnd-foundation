@@ -38,7 +38,31 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
     assert.deepEqual(await page.evaluate(()=>window.__calls),[], 'Closing login must prevent delayed authorization creation');
     await page.goto('http://127.0.0.1:4173/#/factory-toolchain');
     for(let i=0;i<11;i++){await page.locator('.tool-card').nth(i).getByRole('button').click();await page.getByRole('button',{name:'保存配置',exact:true}).waitFor();await page.locator('.el-drawer__close-btn').last().click();}
-    fs.writeFileSync('ui-reports/layout.json',JSON.stringify({scope:'actual_components_with_API_fixtures',receipts,credential_switch:'passed',closed_authorization:'passed',configuration_drawers:11},null,2));
+    const cube=page.locator('.tool-card').filter({has:page.locator('strong',{hasText:/^cube$/})});
+    await cube.getByRole('button').click();
+    await page.getByLabel('测试字段',{exact:true}).fill('fixture-override');
+    await page.getByRole('button',{name:'保存配置',exact:true}).click();
+    await page.waitForFunction(()=>window.__configCalls.length===1);
+    await page.getByRole('button',{name:'恢复默认',exact:true}).click();
+    await page.getByRole('button',{name:'取消',exact:true}).click();
+    assert.equal(await page.getByLabel('测试字段',{exact:true}).inputValue(),'fixture-override');
+    assert.equal(await page.evaluate(()=>window.__configCalls.length),1,'Cancelled reset must not reach API');
+    await page.getByRole('button',{name:'恢复默认',exact:true}).click();
+    await page.getByRole('button',{name:'确认恢复',exact:true}).click();
+    await page.waitForFunction(()=>window.__configCalls.length===2);
+    await page.waitForFunction(()=>document.querySelector('.el-drawer input').value==='');
+    await page.getByLabel('测试字段',{exact:true}).fill('fixture-after-reset');
+    await page.getByRole('button',{name:'保存配置',exact:true}).click();
+    await page.waitForFunction(()=>window.__configCalls.length===3);
+    assert.deepEqual(await page.evaluate(()=>window.__configCalls),[
+      {id:'cube',action:'save',revision:0},{id:'cube',action:'reset',revision:1},{id:'cube',action:'save',revision:2}
+    ]);
+    await page.getByRole('button',{name:'检查已保存配置',exact:true}).click();
+    await page.locator('.el-drawer__close-btn').last().click();
+    await page.locator('.tool-card').filter({has:page.locator('strong',{hasText:/^coder$/})}).getByRole('button').click();
+    await page.waitForTimeout(1200);
+    assert.equal(await page.getByText('迟到探针:cube',{exact:true}).count(),0,'Late probe must not overwrite another integration');
+    fs.writeFileSync('ui-reports/layout.json' ,JSON.stringify({scope:'actual_components_with_API_fixtures',receipts,credential_switch:'passed',closed_authorization:'passed',configuration_drawers:11,reset_confirmation_and_revision:'passed',stale_probe:'passed'},null,2));
   }catch(error){
     if(currentPage && !currentPage.isClosed()) {
       await currentPage.screenshot({path:'ui-reports/failure.png',fullPage:true}).catch(()=>{});

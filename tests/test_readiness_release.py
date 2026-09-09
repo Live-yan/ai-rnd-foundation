@@ -28,6 +28,7 @@ def test_structurizr_receives_file_not_wrapper_default_directory(tmp_path, monke
     command = calls[0]
     assert command[-5:] == ['-jar', '/usr/local/structurizr.war', 'validate', '-w', '/usr/local/structurizr/workspace.dsl']
     assert command[command.index('--entrypoint')+1] == 'java'
+    assert command[command.index('--user')+1] == '10001:10001'
     assert '--network' in command and 'none' in command
     assert calls[-1][:3] == ['docker', 'rm', '-f']
     assert result['validated'] is True
@@ -45,6 +46,8 @@ def test_no_store_and_legacy_demo_fail_closed(db, tmp_path):
         project = response.json()
         result = client.post(f'/factory-api/projects/{project["id"]}/runs', json={'idempotency_key': str(uuid4())})
         assert result.status_code == 422
+        reset = client.delete('/factory/toolchain/coder/config?revision=0')
+        assert reset.status_code == 200 and reset.json()['data']['revision'] == 1
         assert client.delete('/factory/toolchain/coder/config?revision=0').status_code == 409
 
 

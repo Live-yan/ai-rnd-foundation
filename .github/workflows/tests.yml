@@ -8,6 +8,19 @@ permissions:
 jobs:
   contracts:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: contract
+          POSTGRES_PASSWORD: disposable-contract-only
+          POSTGRES_DB: contract
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U contract -d contract"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      FACTORY_TEST_POSTGRES_URL: postgresql+psycopg://contract:disposable-contract-only@127.0.0.1:55433/contract
     steps:
       - uses: actions/checkout@v4
         with:
@@ -126,6 +139,7 @@ jobs:
         run: |
           docker builder prune -af
           docker build -t ai-rnd-coder:0.2.0 integrations/coder
+          docker run --rm --network none --entrypoint sh ai-rnd-coder:0.2.0 -c 'test "$(id -u)" != 0 && python3 --version && uv --version && node --version && pnpm --version'
           docker build -f integrations/cube/Dockerfile.fullstack -t ai-rnd-cube-verifier:ci .
           docker run --rm --entrypoint /opt/rnd-runtime/.venv/bin/python ai-rnd-cube-verifier:ci -c 'import sqlalchemy,redis,fastapi;from pathlib import Path;assert Path("/opt/rnd-verifier/full_stack.py").is_file()'
       - name: Verify optional tool consoles can start without model credentials
@@ -133,7 +147,7 @@ jobs:
           docker builder prune -af
           python3 scripts/setup_toolchain.py
           docker compose -f compose.yaml -f compose.tools.yaml --profile ai --profile tools up -d litellm coder
-          python3 scripts/check_tool_consoles.py
+          python3 scripts/check_tool_consoles.py --workspace-network ai-rnd_default
       - name: Collect worker diagnostics on failure
         if: failure()
         run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=180 postgres postgres-auth-sync migrate worker

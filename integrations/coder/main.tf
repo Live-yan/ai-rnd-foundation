@@ -4,7 +4,13 @@ terraform {
     docker = { source = "kreuzwerker/docker", version = ">= 3.0, < 4.0" }
   }
 }
-provider "coder" {}
+# Agent bootstrap uses this URL, independently of the public browser URL.
+provider "coder" { url = var.coder_agent_url }
+variable "coder_agent_url" {
+  type = string
+  default = "http://coder:7080"
+  description = "Coder URL reachable by workspace agents. The default requires the same private Compose network; use HTTPS DNS for remote provisioners."
+}
 provider "docker" {}
 variable "workspace_image" {
   type = string
@@ -71,7 +77,7 @@ resource "docker_container" "workspace" {
   count = data.coder_workspace.me.start_count
   name = "rnd-${data.coder_workspace.me.id}"
   image = var.workspace_image
-  entrypoint = ["sh", "-c", replace(coder_agent.main.init_script, "/localhost|127\\.0\\.0\\.1/", "host.docker.internal")]
+  entrypoint = ["sh", "-c", coder_agent.main.init_script]
   env = ["CODER_AGENT_TOKEN=${coder_agent.main.token}"]
   host {
     host = "host.docker.internal"

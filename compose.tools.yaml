@@ -7,7 +7,7 @@ services:
     command: ["server"]
     environment:
       CODER_PG_CONNECTION_URL: postgresql://factory:${POSTGRES_PASSWORD}@postgres:5432/coder?sslmode=disable
-      CODER_ACCESS_URL: ${CODER_ACCESS_URL:-http://host.docker.internal:7080}
+      CODER_ACCESS_URL: ${CODER_ACCESS_URL:-http://localhost:7080}
       CODER_HTTP_ADDRESS: 0.0.0.0:7080
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["coder_data:/home/coder"]

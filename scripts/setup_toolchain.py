@@ -8,7 +8,7 @@ DEFAULTS = {
     'FACTORY_CODER_BROWSER_URL': 'http://localhost:7080',
     'FACTORY_CODER_FACTORY_URL': 'http://api:8000',
     'FACTORY_PUBLIC_URL': 'http://localhost:8000',
-    'CODER_ACCESS_URL': 'http://host.docker.internal:7080',
+    'CODER_ACCESS_URL': 'http://localhost:7080',
 }
 
 
