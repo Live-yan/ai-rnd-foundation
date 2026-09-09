@@ -1,0 +1,19 @@
+# Optional administrator-managed tool services. This does not install Cube's KVM cluster.
+services:
+  structurizr:
+    image: structurizr/structurizr:2026.06.28-noble
+    command: ["local"]
+    ports: ["127.0.0.1:8081:8080"]
+    volumes: ["./architecture:/usr/local/structurizr"]
+    profiles: ["tools"]
+  coder:
+    image: ghcr.io/coder/coder:latest
+    command: ["server"]
+    environment:
+      CODER_ACCESS_URL: ${CODER_ACCESS_URL:-http://localhost:7080}
+      CODER_HTTP_ADDRESS: 0.0.0.0:7080
+    volumes: ["coder_data:/home/coder"]
+    ports: ["127.0.0.1:7080:7080"]
+    profiles: ["tools"]
+volumes:
+  coder_data:

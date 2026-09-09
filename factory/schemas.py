@@ -12,7 +12,7 @@ IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 RESERVED = {"id", "owner_id", "created_at", "updated_at", "metadata", "schema", "type", "user"}
 # Keep in sync with factory.providers.catalog.PROVIDER_CATALOG ids.
 ProviderKind = Literal[
-    "openai", "anthropic", "azure_openai", "google", "deepseek", "groq",
+    "chatgpt", "openai", "anthropic", "azure_openai", "google", "deepseek", "groq",
     "openrouter", "ollama", "mistral", "xai", "litellm_proxy", "custom_openai",
     "cerebras", "together_ai", "fireworks_ai", "perplexity", "sambanova",
     "vertex_ai", "bedrock", "cohere", "huggingface", "moonshot", "zai",
@@ -136,7 +136,46 @@ class MessageInput(StrictModel):
     content: str = Field(min_length=1, max_length=16000)
 
 
+class LiteLLMOptions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    timeout: int = Field(default=90, ge=10, le=180)
+    num_retries: int = Field(default=0, ge=0, le=2)
+    drop_params: bool = True
+    top_p: float | None = Field(default=None, ge=0, le=1)
+    frequency_penalty: float | None = Field(default=None, ge=-2, le=2)
+    presence_penalty: float | None = Field(default=None, ge=-2, le=2)
+    seed: int | None = Field(default=None, ge=0, le=2147483647)
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None = None
+    aws_region_name: str | None = Field(default=None, pattern=r"^[a-z0-9-]{1,50}$")
+    vertex_project: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9._:-]{1,100}$")
+    vertex_location: str | None = Field(default=None, pattern=r"^[a-z0-9-]{1,60}$")
+    organization: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,120}$")
+
+
+class ProviderCredentials(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    aws_access_key_id: str = Field(default="", max_length=256)
+    aws_secret_access_key: str = Field(default="", max_length=4096)
+    aws_session_token: str = Field(default="", max_length=16000)
+    vertex_credentials: str = Field(default="", max_length=20000)
+
+    @field_validator("vertex_credentials")
+    @classmethod
+    def service_account_only(cls, value: str) -> str:
+        if value:
+            data = json.loads(value)
+            if not isinstance(data, dict) or data.get("type") != "service_account":
+                raise ValueError("Only a service-account JSON document is accepted, never a file path")
+            if data.get("token_uri") not in {None, "https://oauth2.googleapis.com/token"}:
+                raise ValueError("Custom credential endpoints are not accepted")
+            if not all(data.get(key) for key in ("client_email", "private_key", "project_id")):
+                raise ValueError("Incomplete service-account credentials")
+        return value
+
+
 class ProviderInput(StrictModel):
+    litellm_params: LiteLLMOptions = Field(default_factory=LiteLLMOptions)
+    credentials: ProviderCredentials = Field(default_factory=ProviderCredentials)
     name: str = Field(min_length=1, max_length=80)
     provider: ProviderKind
     base_url: str = Field(default="", max_length=500)
@@ -150,6 +189,8 @@ class ProviderInput(StrictModel):
 
 
 class ProviderUpdate(StrictModel):
+    litellm_params: LiteLLMOptions | None = None
+    credentials: ProviderCredentials | None = None
     name: str | None = Field(default=None, min_length=1, max_length=80)
     provider: ProviderKind | None = None
     base_url: str | None = Field(default=None, max_length=500)

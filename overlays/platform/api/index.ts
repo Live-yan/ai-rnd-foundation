@@ -41,6 +41,9 @@ export interface ProviderProfile {
   enabled: boolean;
   is_default: boolean;
   has_api_key: boolean;
+  auth_status?: string;
+  litellm_params?: Record<string, any>;
+  credential_fields?: string[];
   api_version?: string;
   temperature: number;
   max_tokens: number;
@@ -48,6 +51,8 @@ export interface ProviderProfile {
   updated_at: string;
 }
 export interface ProviderInput {
+  litellm_params?: Record<string, any>;
+  credentials?: Record<string, string>;
   name: string;
   provider: string;
   base_url: string;
@@ -79,6 +84,7 @@ export interface ProviderCatalogItem {
   is_local: boolean;
   extra_hint: string;
   discover_path: string;
+  auth_mode?: string;
 }
 export interface ProviderCatalog {
   categories: string[];
@@ -130,11 +136,32 @@ export interface FactoryRun {
   updated_at: string;
 }
 
+export interface OAuthStatus {
+  status: string;
+  verification_url?: string;
+  user_code?: string;
+  expires_at?: number;
+  interval: number;
+}
+export interface IntegrationConfig {
+  id: string; docs: string; web_url: string; note: string; revision: number; editable: boolean;
+  requires_restart: boolean; startup_values: Record<string, any>;
+  fields: { key: string; label: string; kind: string; value: any; configured: boolean; minimum?: number; maximum?: number }[];
+}
+
 function data<T>(response: any): T {
   return response.data.data as T;
 }
 
 export const FactoryAPI = {
+  async exportProviders() { return data<{yaml: string; environment_variables: string[]; note: string}>(await request({ url: `${API_PATH}/providers/export`, method: "post" })); },
+  async oauthStatus(id: string) { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth`, method: "get" })); },
+  async oauthAction(id: string, action: "begin" | "poll" | "disconnect") { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth/${action}`, method: "post", timeout: 60000 })); },
+  async discoverSavedProvider(id: string) { return data<{models: ProviderCatalogModel[]}>(await request({ url: `${API_PATH}/providers/${id}/discover`, method: "post", timeout: 60000 })); },
+  async integrationConfig(id: string) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "get" })); },
+  async saveIntegration(id: string, revision: number, values: Record<string, any>) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "put", data: {expected_revision: revision, values} })); },
+  async resetIntegration(id: string, revision: number) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "delete", params: {revision} })); },
+  async probeIntegration(id: string) { return data<{status: string; message: string}>(await request({ url: `${API_PATH}/toolchain/${id}/probe`, method: "post", timeout: 60000 })); },
   async health() {
     return data<Record<string, any>>(await request({ url: `${API_PATH}/health`, method: "get" }));
   },
@@ -152,7 +179,7 @@ export const FactoryAPI = {
   },
   async clarify(id: string, providerId?: string | null) {
     return data<FactoryProject>(await request({
-      url: `${API_PATH}/projects/${id}/clarify`, method: "post", timeout: 210000, data: { provider_id: providerId || null },
+      url: `${API_PATH}/projects/${id}/clarify`, method: "post", timeout: 410000, data: { provider_id: providerId || null },
     }));
   },
   async listProviders() {

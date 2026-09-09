@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from dataclasses import dataclass, field
 from uuid import uuid4
 from urllib.parse import urlparse
@@ -15,6 +16,7 @@ from ..config import Settings
 from ..database import Database, ProviderProfile
 from ..schemas import ProviderInput, ProviderUpdate
 from .catalog import REQUIRE_BASE_URL
+from ..schemas import LiteLLMOptions, ProviderCredentials
 from .endpoint_policy import validate_model_origin
 
 
@@ -30,6 +32,9 @@ class ProviderRuntime:
     max_tokens: int
     source: str = "database"
     api_version: str = ""
+    litellm_params: dict = field(default_factory=dict)
+    credentials: dict = field(default_factory=dict, repr=False)
+    owner_id: str = ""
 
 
 def _fernet(settings: Settings) -> Fernet:
@@ -56,6 +61,8 @@ def decrypt_secret(value: str, settings: Settings) -> str:
 
 def validate_endpoint(provider: str, base_url: str) -> str:
     value = base_url.strip()
+    if provider == "chatgpt" and value:
+        raise HTTPException(422, "ChatGPT 登录只连接固定官方端点，不接受自定义 Base URL")
     if provider in REQUIRE_BASE_URL and not value:
         raise HTTPException(422, f"{provider} requires an explicit Base URL")
     if not value:
@@ -82,6 +89,9 @@ def public_provider(row: ProviderProfile) -> dict:
         "temperature": float(config.get("temperature", 0.1)),
         "max_tokens": int(config.get("max_tokens", 6000)),
         "api_version": str(config.get("api_version", "")),
+        "litellm_params": config.get("litellm_params", {}),
+        "credential_fields": config.get("credential_fields", []),
+        "auth_status": config.get("oauth_status", "not_connected") if row.provider == "chatgpt" else "api_key",
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -116,7 +126,10 @@ class ProviderService:
                     id=str(uuid4()), owner_id=owner, name=value.name, provider=value.provider,
                     base_url=base_url, model=value.model.strip(), api_key_ciphertext=encrypted,
                     enabled=value.enabled, is_default=value.is_default and value.enabled,
-                    config={"temperature": value.temperature, "max_tokens": value.max_tokens, "api_version": value.api_version},
+                    config={"temperature": value.temperature, "max_tokens": value.max_tokens, "api_version": value.api_version,
+                            "litellm_params": value.litellm_params.model_dump(exclude_none=True),
+                            "credentials_ciphertext": encrypt_secret(value.credentials.model_dump_json(), self.settings) if any(value.credentials.model_dump().values()) else "",
+                            "credential_fields": [k for k,v in value.credentials.model_dump().items() if v]},
                 )
                 session.add(row)
                 session.flush()
@@ -132,6 +145,8 @@ class ProviderService:
             if not row:
                 raise HTTPException(404, "Provider profile not found")
             values = value.model_dump(exclude_unset=True, exclude_none=True)
+            if values.get("provider", row.provider) != row.provider:
+                raise HTTPException(422, "更换供应商请新建配置，不能复用旧供应商凭据")
             if "is_default" in values:
                 make_default = bool(values.pop("is_default"))
                 if make_default:
@@ -141,7 +156,13 @@ class ProviderService:
                 api_key = values.pop("api_key")
                 row.api_key_ciphertext = encrypt_secret(api_key or "", self.settings)
             config = dict(row.config or {})
-            for key in ("temperature", "max_tokens", "api_version"):
+            if "credentials" in values:
+                new = values.pop("credentials")
+                old = json.loads(decrypt_secret(config.get("credentials_ciphertext", ""), self.settings) or "{}")
+                merged = ProviderCredentials.model_validate({**old, **new}).model_dump()
+                config["credentials_ciphertext"] = encrypt_secret(json.dumps(merged), self.settings) if any(merged.values()) else ""
+                config["credential_fields"] = [k for k, v in merged.items() if v]
+            for key in ("temperature", "max_tokens", "api_version", "litellm_params"):
                 if key in values:
                     config[key] = values.pop(key)
             for key, item in values.items():
@@ -187,6 +208,8 @@ class ProviderService:
             row = session.scalar(stmt.limit(1))
             if row:
                 config = row.config or {}
+                if row.provider == "chatgpt" and config.get("oauth_status") != "connected":
+                    raise HTTPException(409, "请先在供应商页面完成 ChatGPT / Codex 登录")
                 validate_model_origin(row.provider, row.base_url, self.settings)
                 return ProviderRuntime(
                     id=row.id, name=row.name, provider=row.provider, base_url=row.base_url, model=row.model,
@@ -194,6 +217,9 @@ class ProviderService:
                     temperature=float(config.get("temperature", 0.1)),
                     max_tokens=int(config.get("max_tokens", self.settings.model_max_tokens)),
                     api_version=str(config.get("api_version", "")),
+                    litellm_params=LiteLLMOptions.model_validate(config.get("litellm_params", {})).model_dump(exclude_none=True),
+                    credentials=json.loads(decrypt_secret(config.get("credentials_ciphertext", ""), self.settings) or "{}"),
+                    owner_id=owner,
                 )
         if provider_id and provider_id != "system-litellm":
             raise HTTPException(404, "Selected provider is unavailable, disabled, or belongs to another user")

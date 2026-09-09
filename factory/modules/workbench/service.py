@@ -26,9 +26,15 @@ ANALYSIS_FILES = frozenset({
 
 class WorkbenchService:
     def __init__(self, db: Database, settings: Settings):
-        self.settings = settings
+        self._settings = settings
+        self.db = db
         self.repo = Repository(db)
         self.providers = ProviderService(db, settings)
+
+    @property
+    def settings(self):
+        from factory.tool_settings import ToolSettingsService
+        return ToolSettingsService(self.db, self._settings).effective()
 
     async def clarify_project(self, owner: str, project_id: str, provider_id: str | None) -> dict:
         project = await run_in_threadpool(self.repo.get_project, owner, project_id)
