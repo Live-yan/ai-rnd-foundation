@@ -64,13 +64,28 @@ jobs:
           docker build --target frontend -t ai-rnd-frontend-smoke .
           docker build -t ai-rnd-foundation:0.1.0 .
           docker build -f Dockerfile.acceptance -t ai-rnd-acceptance:ci .
+      - name: Prove existing-volume PostgreSQL password recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          compose=(docker compose -f compose.yaml -f compose.ci.yaml)
+          "${compose[@]}" up -d postgres
+          # Simulate a database volume initialized by an older .env.
+          "${compose[@]}" exec -T -u postgres postgres \
+            psql -U factory -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER ROLE factory WITH PASSWORD 'ci-stale-volume-password';" >/dev/null
+          "${compose[@]}" run --rm postgres-auth-sync
+          password="$(sed -n 's/^POSTGRES_PASSWORD=//p' .env | head -n 1)"
+          test -n "$password"
+          "${compose[@]}" exec -T -e PGPASSWORD="$password" postgres \
+            psql -h 127.0.0.1 -U factory -d factory -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null
       - name: Start isolated PostgreSQL, Redis and Temporal worker
         run: docker compose -f compose.yaml -f compose.ci.yaml up -d redis worker
       - name: Exercise clarification, approval, delivery and genuine product authentication
         run: timeout 900 docker compose -f compose.yaml -f compose.ci.yaml run --use-aliases --rm acceptance
       - name: Collect worker diagnostics on failure
         if: failure()
-        run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=150 worker migrate
+        run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=180 postgres postgres-auth-sync migrate worker
       - name: Export only acceptance reports from the private data directory
         if: always()
         shell: bash
