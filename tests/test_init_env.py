@@ -22,6 +22,26 @@ def test_existing_env_still_creates_missing_data_dir(tmp_path: Path, monkeypatch
     assert "FACTORY_CREDENTIAL_ENCRYPTION_KEY=existing" in (tmp_path / ".env").read_text(encoding="utf-8")
 
 
+def test_directory_created_after_missing_probe_is_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_root(monkeypatch, tmp_path)
+    data = tmp_path / "data"
+    real_mkdir = Path.mkdir
+
+    def racing_mkdir(
+        path: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+    ) -> None:
+        if path == data and not data.exists():
+            real_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+            raise FileExistsError(17, "File exists", str(path))
+        real_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+    monkeypatch.setattr(Path, "mkdir", racing_mkdir)
+    init_env.main([])
+
+    assert data.is_dir()
+    assert (tmp_path / ".env").is_file()
+
+
 def test_data_file_conflict_fails_before_creating_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _use_root(monkeypatch, tmp_path)
     (tmp_path / "data").write_text("preserve me", encoding="utf-8")

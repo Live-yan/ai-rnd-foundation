@@ -81,8 +81,21 @@ def ensure_data_dir(*, repair: bool = False) -> Path:
     if kind in {"directory", "symlink_directory"}:
         return data_dir
     if kind == "missing":
-        data_dir.mkdir(parents=True, exist_ok=False)
-        return data_dir
+        try:
+            data_dir.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            # Another initializer (or Docker) may create the bind-mount source
+            # between the read-only probe above and mkdir. Re-check before
+            # treating the harmless race as a path conflict.
+            kind = _path_kind(data_dir)
+            if kind in {"directory", "symlink_directory"}:
+                return data_dir
+            if kind == "missing":
+                raise SystemExit(
+                    f"Cannot initialize {data_dir}: the path changed during creation; retry the command."
+                )
+        else:
+            return data_dir
 
     if not repair:
         raise SystemExit(
