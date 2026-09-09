@@ -10,3 +10,5 @@ runtime/
 .pytest_cache/
 .ruff_cache/
 *.zip
+AI_RND_Platform_Handbook.pdf
+AI_RND_Platform_Handbook.md
