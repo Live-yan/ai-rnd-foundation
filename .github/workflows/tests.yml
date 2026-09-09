@@ -69,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           compose=(docker compose -f compose.yaml -f compose.ci.yaml)
-          "${compose[@]}" up -d postgres
+          "${compose[@]}" up -d --wait --wait-timeout 120 postgres
           # Simulate a database volume initialized by an older .env.
           "${compose[@]}" exec -T -u postgres postgres \
             psql -U factory -d postgres -v ON_ERROR_STOP=1 \
