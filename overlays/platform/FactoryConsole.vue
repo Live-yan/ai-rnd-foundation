@@ -1,86 +1,142 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
-import { Auth } from '@utils/auth';
+import { computed, onMounted, onUnmounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
+import FactoryAPI, { type FactoryProject, type FactoryRun, type ProviderProfile, type RunEvent, type ToolchainItem } from "@/api/module_factory";
 
-type Message = { role: string; content: string };
-type Project = { id: string; title: string; messages: Message[] };
-type Run = { id: string; status: string; spec: Record<string, unknown> | null; spec_digest: string;
-  error: string; checks: Record<string, unknown>; download_available: boolean; provider: string; };
-type EventRow = { id: number; message: string; level: string };
-const title = ref('设备台账与维护记录');
-const requirement = ref('我需要设备台账，记录设备名称、编号、是否启用；维护记录关联设备，记录维护日期和备注。每位用户仅管理自己的记录。');
-const followup = ref('');
-const project = ref<Project | null>(null);
-const projects = ref<Project[]>([]);
-const runs = ref<Run[]>([]);
-const run = ref<Run | null>(null);
-const provider = ref('demo');
-const sandbox = ref('static');
-const useSerena = ref(false);
+const router = useRouter();
+const projects = ref<FactoryProject[]>([]);
+const providers = ref<ProviderProfile[]>([]);
+const tools = ref<ToolchainItem[]>([]);
+const runs = ref<FactoryRun[]>([]);
+const events = ref<RunEvent[]>([]);
+const project = ref<FactoryProject | null>(null);
+const run = ref<FactoryRun | null>(null);
+const providerId = ref<string | null>(null);
+const title = ref("设备台账与维护管理");
+const requirement = ref("我需要一个设备台账与维护管理系统。请先分析需求，问清楚角色、数据范围、业务规则、验收条件，再开始设计和生成。");
+const answer = ref("");
+const mode = ref<"core" | "full">("full");
+const sandbox = ref<"static" | "docker" | "cube">("cube");
+const useSerena = ref(true);
+const provisionCoder = ref(true);
 const acceptLimitations = ref(false);
 const busy = ref(false);
-const error = ref('');
-const events = ref<EventRow[]>([]);
-const integration = ref<Record<string,string>>({});
+const createVisible = ref(false);
+const specVisible = ref(false);
+const logVisible = ref(false);
 let timer: ReturnType<typeof setTimeout> | undefined;
-let stopped = false;
 
-async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const token = Auth.getAccessToken();
-  if (!token) throw new Error('请先在 FastapiAdmin 登录页面登录，然后进入 /web/#/factory。');
-  const response = await fetch('/factory-api' + path, {
-    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`HTTP ${response.status}: ${text.slice(0, 900)}`);
-  }
-  return await response.json() as T;
+const stages = [
+  ["clarify", "需求澄清", "LangGraph + LiteLLM"],
+  ["context", "模板理解", "ToolHive + Serena"],
+  ["plan", "结构规划", "LangGraph + LiteLLM"],
+  ["openspec", "规格门禁", "OpenSpec"],
+  ["architecture", "架构设计", "Structurizr C4 + diagrams"],
+  ["human_gate", "人工确认", "Temporal Signal"],
+  ["generate", "源码生成", "FastapiAdmin Factory"],
+  ["sandbox", "隔离验证", "CubeSandbox"],
+  ["package", "交付打包", "SHA-256"],
+  ["coder", "IDE 工作区", "Coder"],
+  ["complete", "完成", "Temporal"],
+] as const;
+const defaultProvider = computed(() => providers.value.find((x) => x.is_default && x.enabled) || providers.value.find((x) => x.enabled));
+const clarificationReady = computed(() => project.value?.clarification_status === "READY");
+const questions = computed(() => project.value?.clarification?.questions || []);
+const unsupported = computed(() => (run.value?.spec?.unsupported_features || []) as string[]);
+const fullReady = computed(() => {
+  const required = ["fastapiadmin", "langgraph", "litellm", "temporal", "openspec", "diagrams", "structurizr", "toolhive", "serena", "cube", "coder"];
+  const state = new Map(tools.value.map((x) => [x.id, x.configured]));
+  return required.every((id) => state.get(id));
+});
+const finishedStages = computed(() => stages.filter(([key]) => stageState(key) === "ok").length);
+
+function errorText(error: any) {
+  return error?.response?.data?.msg || error?.response?.data?.detail || error?.message || String(error);
 }
-async function guarded(fn: () => Promise<void>) {
-  busy.value = true; error.value = '';
-  try { await fn(); } catch (e) { error.value = e instanceof Error ? e.message : String(e); }
+async function guarded<T>(fn: () => Promise<T>) {
+  busy.value = true;
+  try { return await fn(); }
+  catch (error: any) { ElMessage.error(errorText(error)); }
   finally { busy.value = false; }
 }
-async function refreshProjects() { projects.value = await request<Project[]>('/projects'); }
+function stageState(key: string) {
+  if (key === "clarify") return clarificationReady.value ? "ok" : project.value ? "doing" : "wait";
+  if (key === "human_gate" && run.value?.status === "AWAITING_APPROVAL") return "doing";
+  if (key === "complete" && run.value?.status === "READY") return "ok";
+  const status = String(run.value?.stage_details?.[key]?.status || "");
+  if (/FAIL|ERROR/.test(status)) return "bad";
+  if (/READY|PLANNED|VALIDATED|GENERATED|VERIFIED|PACKAGED|SKIPPED/.test(status)) return "ok";
+  return status ? "doing" : "wait";
+}
+function setMode(value: "core" | "full") {
+  if (value === "full") { sandbox.value = "cube"; useSerena.value = true; provisionCoder.value = true; }
+}
+async function refreshBase() {
+  [providers.value, tools.value, projects.value] = await Promise.all([
+    FactoryAPI.listProviders(), FactoryAPI.toolchain(), FactoryAPI.listProjects(),
+  ]);
+  if (!providerId.value) providerId.value = defaultProvider.value?.id || null;
+}
+async function chooseProject(item: FactoryProject) {
+  await guarded(async () => {
+    project.value = await FactoryAPI.getProject(item.id);
+    runs.value = await FactoryAPI.listRuns(item.id);
+    run.value = runs.value[0] || null;
+    events.value = run.value ? await FactoryAPI.events(run.value.id, 0) : [];
+    acceptLimitations.value = false;
+  });
+}
 async function createProject() {
+  if (!title.value.trim() || requirement.value.trim().length < 5) return;
   await guarded(async () => {
-    project.value = await request<Project>('/projects', 'POST', {
-      title: title.value, requirement: requirement.value, template_id: 'fastapiadmin-pg-v1',
-    });
-    run.value = null; runs.value = []; events.value = []; await refreshProjects();
+    project.value = await FactoryAPI.createProject({ title: title.value.trim(), requirement: requirement.value.trim() });
+    createVisible.value = false;
+    await refreshBase();
+    if (!providerId.value) { ElMessage.warning("项目已创建，请先配置模型供应商。不会退回固定 Demo。"); return; }
+    project.value = await FactoryAPI.clarify(project.value.id, providerId.value);
+    runs.value = []; run.value = null; events.value = [];
   });
 }
-async function selectProject(p: Project) {
-  await guarded(async () => {
-    project.value = await request<Project>(`/projects/${p.id}`);
-    runs.value = await request<Run[]>(`/projects/${p.id}/runs`);
-    run.value = runs.value[0] || null; events.value = []; acceptLimitations.value = false;
-  });
+async function clarify() {
+  if (!project.value) return;
+  await guarded(async () => { project.value = await FactoryAPI.clarify(project.value!.id, providerId.value); await refreshBase(); });
 }
-async function addMessage() {
-  if (!project.value || !followup.value.trim()) return;
+async function sendAnswer() {
+  if (!project.value || !answer.value.trim()) return;
   await guarded(async () => {
-    project.value = await request<Project>(`/projects/${project.value!.id}/messages`, 'POST', { content: followup.value });
-    followup.value = '';
+    project.value = await FactoryAPI.addMessage(project.value!.id, answer.value.trim());
+    answer.value = "";
+    project.value = await FactoryAPI.clarify(project.value!.id, providerId.value);
+    await refreshBase();
   });
 }
 async function startRun() {
-  if (!project.value) return;
+  if (!project.value || !clarificationReady.value || !providerId.value) return;
+  if (mode.value === "full" && !fullReady.value) { ElMessage.warning("完整模式仍有组件未配置，请先检查工具链中心。"); return; }
   await guarded(async () => {
-    run.value = await request<Run>(`/projects/${project.value!.id}/runs`, 'POST', {
-      provider: provider.value, sandbox: sandbox.value, use_serena: useSerena.value,
+    run.value = await FactoryAPI.startRun(project.value!.id, {
+      provider_id: providerId.value,
+      pipeline_mode: mode.value,
+      sandbox: sandbox.value,
+      use_serena: useSerena.value,
+      provision_coder: provisionCoder.value,
       idempotency_key: crypto.randomUUID(),
     });
-    events.value = []; acceptLimitations.value = false;
-    runs.value = await request<Run[]>(`/projects/${project.value!.id}/runs`);
+    runs.value = await FactoryAPI.listRuns(project.value!.id);
+    events.value = [];
   });
 }
+async function chooseRun(item: FactoryRun) {
+  run.value = await FactoryAPI.getRun(item.id);
+  events.value = await FactoryAPI.events(item.id, 0);
+}
+function selectRun(id: string) { const item = runs.value.find((x) => x.id === id); if (item) void chooseRun(item); }
 async function decide(approve: boolean) {
-  if (!run.value) return;
+  if (!run.value?.spec_digest) return;
+  if (approve && unsupported.value.length && !acceptLimitations.value) { ElMessage.warning("请先阅读并接受当前确定性生成器未实现的能力。"); return; }
   await guarded(async () => {
-    run.value = await request<Run>(`/runs/${run.value!.id}/decision`, 'POST', {
+    run.value = await FactoryAPI.decide(run.value!.id, {
       spec_digest: run.value!.spec_digest, approve, accept_limitations: acceptLimitations.value,
     });
   });
@@ -88,102 +144,98 @@ async function decide(approve: boolean) {
 async function download() {
   if (!run.value) return;
   await guarded(async () => {
-    const r = await fetch(`/factory-api/runs/${run.value!.id}/download`, {
-      headers: { Authorization: `Bearer ${Auth.getAccessToken()}` },
-    });
-    if (!r.ok) throw new Error(await r.text());
-    const url = URL.createObjectURL(await r.blob());
-    const a = document.createElement('a'); a.href = url;
-    a.download = String(run.value!.spec?.slug || 'product') + '.zip'; a.click();
+    const blob = await FactoryAPI.download(run.value!.id);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url; link.download = `${run.value!.spec?.slug || "product"}.zip`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 }
-async function coder() {
-  if (!run.value) return;
-  await guarded(async () => {
-    const value = await request<{url: string}>(`/runs/${run.value!.id}/coder`, 'POST');
-    // Workspace provisioning and ZIP import are separate operations; no hidden upload.
-    const url = new URL(value.url);
-    if (!['https:', 'http:'].includes(url.protocol)) throw new Error('不支持的 Coder URL');
-    window.open(url.href, '_blank', 'noopener,noreferrer');
-    error.value = 'Coder 工作区已请求创建；请等待其构建完成，再手动上传本次下载的源码包。';
-  });
+function openCoder() {
+  const url = run.value?.checks?.coder?.url;
+  if (url) window.open(String(url), "_blank", "noopener,noreferrer");
 }
 async function poll() {
   try {
-    const current = run.value?.id;
-    if (current) {
-      const result = await request<Run>(`/runs/${current}`);
-      const after = events.value.at(-1)?.id || 0;
-      const newEvents = await request<EventRow[]>(`/runs/${current}/events?after=${after}`);
-      if (run.value?.id === current) { run.value = result; events.value.push(...newEvents); }
+    if (run.value?.id) {
+      const id = run.value.id;
+      const [latest, more] = await Promise.all([FactoryAPI.getRun(id), FactoryAPI.events(id, events.value.at(-1)?.id || 0)]);
+      if (run.value?.id === id) { run.value = latest; events.value.push(...more); }
     }
-  } catch (e) { error.value = String(e); }
-  finally { if (!stopped) timer = setTimeout(poll, 2000); }
+  } catch { /* polling never changes the task state */ }
+  finally { timer = setTimeout(poll, 2500); }
 }
 onMounted(async () => {
-  await guarded(async () => { await refreshProjects(); integration.value = await request('/integrations'); });
+  await guarded(async () => { await refreshBase(); if (projects.value.length) await chooseProject(projects.value[0]); });
   void poll();
 });
-onUnmounted(() => { stopped = true; if (timer) clearTimeout(timer); });
+onUnmounted(() => { if (timer) clearTimeout(timer); });
 </script>
 
 <template>
-  <main class="factory-shell">
-    <header><a href="#/home">← 管理后台</a><p class="eyebrow">AI SOFTWARE R&D / FOUNDATION 0.1</p>
-      <h1>从需求到可检验的项目源码</h1>
-      <p>FastapiAdmin · Vue3 · uv · PostgreSQL。当前生成范围：单用户归属隔离的类型化 CRUD 与父子关联。</p>
-    </header>
-    <p v-if="error" role="alert" class="error">{{ error }}</p>
-    <div class="columns">
-      <aside class="panel"><h2>项目</h2><button v-for="p in projects" :key="p.id" @click="selectProject(p)">{{ p.title }}</button>
-        <h3>集成配置</h3><dl><template v-for="(value, key) in integration" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
-        <small>“已配置”不等于“已连通”。外部集成需要单独验收。</small>
-      </aside>
-      <section class="panel"><h2>1 · 需求对话</h2>
-        <label>项目名称<input v-model="title" maxlength="100" /></label>
-        <label>技术模板<select><option>FastapiAdmin / Vue3 / Python / PostgreSQL</option></select></label>
-        <label>第一条需求<textarea v-model="requirement" rows="5" maxlength="16000" /></label>
-        <button :disabled="busy" @click="createProject">创建项目</button>
-        <template v-if="project"><h3>{{ project.title }}</h3>
-          <article v-for="(m, i) in project.messages" :key="i" class="message">{{ m.content }}</article>
-          <textarea v-model="followup" placeholder="补充需求；每个新生成任务读取对话快照，不改动旧包。" rows="3" />
-          <button :disabled="busy" @click="addMessage">添加补充说明</button>
-          <h2>2 · 规划与工具</h2><label>规划模式<select v-model="provider">
-            <option value="demo">固定演示：设备 + 维护记录（不解析任意需求）</option>
-            <option value="litellm">真实模型：通过 LiteLLM 解读以上对话</option></select></label>
-          <label>校验方式<select v-model="sandbox"><option value="static">静态检查 + 业务契约检查（不启动全栈）</option>
-            <option value="docker">Docker：固定校验命令（需启用独立配置）</option>
-            <option value="cube">CubeSandbox：远程沙箱校验（需预配）</option></select></label>
-          <label><input v-model="useSerena" type="checkbox" /> 使用 ToolHive 管理的只读 Serena 模板上下文</label>
-          <button :disabled="busy" @click="startRun">创建新的规划任务</button>
-          <label v-if="runs.length">历史任务<select @change="run = runs.find(r => r.id === ($event.target as HTMLSelectElement).value) || null; events = []">
-            <option v-for="r in runs" :key="r.id" :value="r.id">{{ r.id.slice(0,8) }} · {{ r.status }}</option></select></label>
+  <div v-loading="busy" class="factory-page">
+    <section class="hero">
+      <div><span>AI SOFTWARE R&D · FASTAPIADMIN</span><h1>从需求澄清到可交付工程</h1><p>先问清楚，再规划、生成、验证和交付。每个组件都有运行阶段与真实状态。</p></div>
+      <div class="hero-actions"><el-button @click="router.push('/factory-providers')">模型供应商</el-button><el-button @click="router.push('/factory-toolchain')">工具链中心</el-button><el-button type="primary" @click="createVisible = true">新建项目</el-button></div>
+    </section>
+
+    <section class="stats">
+      <el-card shadow="never"><small>项目</small><strong>{{ projects.length }}</strong></el-card>
+      <el-card shadow="never"><small>模型供应商</small><strong>{{ providers.filter(x => x.enabled).length }}</strong></el-card>
+      <el-card shadow="never"><small>工具链</small><strong>{{ tools.filter(x => x.configured).length }}/{{ tools.length }}</strong></el-card>
+      <el-card shadow="never"><small>本次阶段</small><strong>{{ finishedStages }}/{{ stages.length }}</strong></el-card>
+    </section>
+
+    <section class="workspace">
+      <el-card shadow="never" class="projects">
+        <template #header><div class="section-title"><b>研发项目</b><el-button text @click="createVisible = true">＋</el-button></div></template>
+        <el-scrollbar height="610px">
+          <button v-for="item in projects" :key="item.id" class="project-item" :class="{ active: item.id === project?.id }" @click="chooseProject(item)">
+            <span>{{ item.title.slice(0, 1) }}</span><div><b>{{ item.title }}</b><small>{{ item.clarification_status }}</small></div><el-tag size="small" :type="item.clarification_status === 'READY' ? 'success' : 'warning'">{{ item.clarification_status === 'READY' ? '已澄清' : '待确认' }}</el-tag>
+          </button>
+          <el-empty v-if="!projects.length" description="创建第一个研发项目" />
+        </el-scrollbar>
+      </el-card>
+
+      <el-card shadow="never" class="chat">
+        <template #header><div class="section-title"><div><b>需求对话</b><small>{{ project?.title || '未选择项目' }}</small></div><el-select v-model="providerId" placeholder="选择模型" style="width:240px"><el-option v-for="item in providers.filter(x => x.enabled)" :key="item.id" :value="item.id" :label="`${item.name} · ${item.model}`" /></el-select></div></template>
+        <template v-if="project">
+          <el-alert :type="clarificationReady ? 'success' : 'info'" :title="clarificationReady ? 'AI 已确认需求可进入规划' : '不会直接生成代码：先完成需求澄清'" :closable="false" show-icon />
+          <el-scrollbar height="360px" class="messages">
+            <div v-for="(message, index) in project.messages" :key="index" class="message" :class="message.role">
+              <span>{{ message.role === 'assistant' ? 'AI' : '我' }}</span><div><small>{{ message.role === 'assistant' ? '需求分析 Agent' : '需求方' }}</small><p>{{ message.content }}</p><ol v-if="message.questions?.length"><li v-for="q in message.questions" :key="q">{{ q }}</li></ol></div>
+            </div>
+          </el-scrollbar>
+          <div v-if="questions.length" class="questions"><b>还需要确认 {{ questions.length }} 个阻塞问题</b><ol><li v-for="q in questions" :key="q">{{ q }}</li></ol></div>
+          <el-input v-model="answer" type="textarea" :rows="3" maxlength="16000" show-word-limit placeholder="逐项回答阻塞问题，或补充新的业务约束" />
+          <div class="composer"><el-button @click="clarify">重新分析</el-button><el-button type="primary" :disabled="!answer.trim()" @click="sendAnswer">发送并继续澄清</el-button></div>
         </template>
-      </section>
-      <section class="panel"><h2>3 · 确认、生成、下载</h2>
-        <template v-if="run"><p><strong>{{ run.status }}</strong> · {{ run.id.slice(0,8) }}</p>
-          <p v-if="run.provider === 'demo'" class="notice">这是固定演示结果，不是 AI 已实现了全部需求。</p>
-          <pre v-if="run.spec">{{ JSON.stringify(run.spec, null, 2) }}</pre>
-          <template v-if="run.status === 'AWAITING_APPROVAL'">
-            <label><input v-model="acceptLimitations" type="checkbox" /> 我已阅读 unsupported_features，接受这些未实现项。</label>
-            <button :disabled="busy" @click="decide(true)">确认当前规格并生成</button>
-            <button :disabled="busy" @click="decide(false)">拒绝此规格</button>
-          </template>
-          <p v-if="run.error" class="error">{{ run.error }}</p>
-          <template v-if="run.download_available"><p class="notice">源码骨架已准备好；请查看 quality.json。此状态不代表已经通过完整部署、业务验收或生产安全审计。</p>
-            <button :disabled="busy" @click="download">下载项目 ZIP</button>
-            <button :disabled="busy" @click="coder">创建 Coder 工作区（可选）</button>
-          </template>
-          <h3>检查结果</h3><pre>{{ JSON.stringify(run.checks, null, 2) }}</pre>
-          <h3>事件日志</h3><p v-for="e in events" :key="e.id" class="event">{{ e.message }}</p>
-        </template><p v-else>先创建项目并发起规划。任务会在后台服务中执行；关闭页面后可从项目列表恢复查看。</p>
-      </section>
-    </div>
-  </main>
+        <el-empty v-else description="选择或创建一个项目" />
+      </el-card>
+
+      <el-card shadow="never" class="pipeline">
+        <template #header><div class="section-title"><b>研发流水线</b><el-button text :disabled="!run" @click="logVisible = true">运行日志</el-button></div></template>
+        <div class="mode-row"><el-radio-group v-model="mode" size="small" @change="setMode"><el-radio-button value="full">完整模式</el-radio-button><el-radio-button value="core">基础模式</el-radio-button></el-radio-group><el-select v-model="sandbox" size="small" :disabled="mode === 'full'"><el-option label="CubeSandbox" value="cube" /><el-option label="Docker" value="docker" /><el-option label="静态" value="static" /></el-select><el-checkbox v-model="useSerena" :disabled="mode === 'full'">Serena</el-checkbox><el-checkbox v-model="provisionCoder" :disabled="mode === 'full'">Coder</el-checkbox></div>
+        <el-alert v-if="mode === 'full' && !fullReady" type="warning" :closable="false" title="完整模式缺少组件配置；后端也会硬门禁阻止启动" />
+        <div v-for="([key, name, tool], index) in stages" :key="key" class="stage" :class="stageState(key)"><span>{{ index + 1 }}</span><div><b>{{ name }}</b><small>{{ tool }}</small><em>{{ run?.stage_details?.[key]?.status || (key === 'clarify' ? project?.clarification_status : 'WAITING') }}</em></div></div>
+        <el-button type="primary" size="large" class="start" :disabled="!clarificationReady || !providerId || (mode === 'full' && !fullReady)" @click="startRun">启动研发流水线</el-button>
+        <el-select v-if="runs.length" :model-value="run?.id" class="history" placeholder="历史运行" @change="selectRun"><el-option v-for="item in runs" :key="item.id" :value="item.id" :label="`${item.id.slice(0, 8)} · ${item.status}`" /></el-select>
+      </el-card>
+    </section>
+
+    <el-card v-if="run" shadow="never" class="run-card">
+      <div class="run-head"><div><small>RUN {{ run.id.slice(0, 8) }}</small><h3>{{ run.spec?.title || project?.title }}</h3></div><div><el-button :disabled="!run.spec" @click="specVisible = true">查看规格</el-button><el-button v-if="run.checks?.coder?.url" @click="openCoder">打开 Coder</el-button><el-button v-if="run.download_available" type="success" @click="download">下载源码 ZIP</el-button></div></div>
+      <el-descriptions :column="4" border size="small"><el-descriptions-item label="状态">{{ run.status }}</el-descriptions-item><el-descriptions-item label="模式">{{ run.pipeline_mode }}</el-descriptions-item><el-descriptions-item label="沙箱">{{ run.sandbox }}</el-descriptions-item><el-descriptions-item label="SHA">{{ run.artifact_sha256?.slice(0, 18) || '—' }}</el-descriptions-item></el-descriptions>
+      <el-alert v-if="run.error" type="error" :title="run.error" :closable="false" show-icon />
+      <div v-if="run.status === 'AWAITING_APPROVAL'" class="approval"><div><b>人工确认门禁</b><p>检查结构化规格、OpenSpec/C4、验收标准和未支持项后再继续。</p></div><div><el-checkbox v-model="acceptLimitations">已阅读并接受未实现项</el-checkbox><el-button @click="decide(false)">拒绝</el-button><el-button type="primary" @click="decide(true)">批准并继续</el-button></div></div>
+    </el-card>
+
+    <el-dialog v-model="createVisible" title="创建研发项目" width="720px"><el-form label-position="top"><el-form-item label="项目名称"><el-input v-model="title" /></el-form-item><el-form-item label="软件需求"><el-input v-model="requirement" type="textarea" :rows="8" maxlength="16000" show-word-limit /></el-form-item><el-alert type="info" :closable="false" title="创建后先发送给真实 AI 做需求澄清；未通过 READY 门禁不会生成代码。" /></el-form><template #footer><el-button @click="createVisible = false">取消</el-button><el-button type="primary" @click="createProject">创建并开始 AI 分析</el-button></template></el-dialog>
+    <el-drawer v-model="specVisible" title="结构化规格" size="55%"><el-alert v-if="unsupported.length" type="warning" :closable="false" title="以下能力未由当前确定性生成器完成" /><ul><li v-for="item in unsupported" :key="item">{{ item }}</li></ul><pre>{{ JSON.stringify(run?.spec, null, 2) }}</pre></el-drawer>
+    <el-drawer v-model="logVisible" title="Temporal / Toolchain 运行日志" size="50%"><el-timeline><el-timeline-item v-for="event in events" :key="event.id" :timestamp="new Date(event.created_at).toLocaleString()" :type="event.level === 'error' ? 'danger' : 'primary'"><b>{{ event.stage || 'event' }} · {{ event.tool || 'platform' }}</b><p>{{ event.message }}</p></el-timeline-item></el-timeline><el-empty v-if="!events.length" description="暂无事件" /></el-drawer>
+  </div>
 </template>
 
 <style scoped>
-.factory-shell{padding:32px;background:#f3f6fa;color:#182235;min-height:100vh;font-family:system-ui,sans-serif}
-header{max-width:1500px;margin:auto auto 28px}.eyebrow{font-size:12px;letter-spacing:2px;color:#42668f}h1{font-size:32px;margin:10px 0}h2{font-size:20px}h3{font-size:16px}.columns{display:grid;grid-template-columns:230px 1fr 1.15fr;gap:20px;max-width:1500px;margin:auto}.panel{background:white;border:1px solid #dce4ee;border-radius:14px;padding:22px;min-width:0}label{display:block;margin:14px 0}input:not([type=checkbox]),textarea,select{display:block;box-sizing:border-box;width:100%;margin-top:7px;padding:10px;border:1px solid #c3cfdd;border-radius:7px;font:inherit}button{background:#204e79;color:white;border:0;border-radius:7px;padding:10px 13px;margin:6px 6px 6px 0;cursor:pointer}button:disabled{opacity:.5;cursor:wait}aside button{display:block;width:100%;text-align:left}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;background:#f3f6fa;padding:12px;font-size:12px}dt{font-weight:600;font-size:12px}dd{margin:0 0 10px;font-size:11px;overflow-wrap:anywhere}.error{background:#fff0e9;color:#8b2c10;padding:14px;white-space:pre-wrap}.notice{background:#eef5ff;padding:12px}.message{white-space:pre-wrap;background:#f0f5fb;padding:12px;margin:10px 0}.event{font-size:12px;border-bottom:1px solid #eee;padding-bottom:8px}@media(max-width:1100px){.columns{grid-template-columns:1fr}.factory-shell{padding:16px}}
+.factory-page{padding:20px;min-height:100%;background:var(--el-bg-color-page)}.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;padding:25px 28px;border-radius:16px;background:linear-gradient(120deg,#111a2d,#173969 55%,#245d91);color:#fff}.hero span{font-size:11px;letter-spacing:1.5px}.hero h1{margin:9px 0 6px;font-size:28px}.hero p{margin:0;color:#ffffffc9}.hero-actions{display:flex;gap:8px;white-space:nowrap}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:14px 0}.stats :deep(.el-card__body){display:grid;gap:4px}.stats small{color:var(--el-text-color-secondary)}.stats strong{font-size:22px}.workspace{display:grid;grid-template-columns:255px minmax(480px,1.2fr) minmax(350px,.9fr);gap:12px}.section-title,.run-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.section-title small{display:block;margin-top:3px;color:var(--el-text-color-secondary)}.project-item{width:100%;display:grid;grid-template-columns:34px 1fr auto;gap:8px;align-items:center;padding:10px;border:1px solid transparent;border-radius:10px;background:transparent;text-align:left;color:inherit;cursor:pointer}.project-item:hover,.project-item.active{background:var(--el-fill-color-light)}.project-item.active{border-color:var(--el-color-primary-light-7)}.project-item>span{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:var(--el-color-primary);color:#fff}.project-item b,.project-item small{display:block}.project-item small{margin-top:3px;color:var(--el-text-color-secondary)}.messages{margin:10px 0}.message{display:flex;gap:9px;margin:12px 0}.message.user{flex-direction:row-reverse}.message>span{flex:0 0 32px;height:32px;display:grid;place-items:center;border-radius:9px;background:var(--el-fill-color-dark);font-size:11px}.message.assistant>span{background:var(--el-color-primary);color:#fff}.message>div{max-width:86%;padding:10px 13px;border-radius:11px;background:var(--el-fill-color-light)}.message.user>div{background:var(--el-color-primary-light-9)}.message p{white-space:pre-wrap;margin:4px 0;line-height:1.6}.message small{color:var(--el-text-color-secondary)}.questions{margin:10px 0;padding:12px;border-radius:10px;background:var(--el-color-warning-light-9)}.composer{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}.mode-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}.stage{display:grid;grid-template-columns:26px 1fr;gap:8px;min-height:45px}.stage>span{width:22px;height:22px;display:grid;place-items:center;border:2px solid var(--el-border-color);border-radius:50%;font-size:10px}.stage b{font-size:13px}.stage small{margin-left:7px;color:var(--el-text-color-secondary)}.stage em{display:block;margin-top:3px;font-size:10px;color:var(--el-text-color-placeholder);font-style:normal}.stage.ok>span{background:var(--el-color-success);border-color:var(--el-color-success);color:#fff}.stage.doing>span{border-color:var(--el-color-primary);color:var(--el-color-primary)}.stage.bad>span{background:var(--el-color-danger);border-color:var(--el-color-danger);color:#fff}.start,.history{width:100%;margin-top:8px}.run-card{margin-top:12px}.run-head h3{margin:4px 0}.approval{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-top:12px;padding:13px;border-radius:10px;background:var(--el-color-warning-light-9)}.approval p{margin:4px 0;color:var(--el-text-color-secondary)}.approval>div:last-child{display:flex;align-items:center;gap:8px;flex-wrap:wrap}pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:14px;border-radius:8px;background:var(--el-fill-color-light)}@media(max-width:1350px){.workspace{grid-template-columns:240px 1fr}.pipeline{grid-column:1/-1}.stats{grid-template-columns:repeat(2,1fr)}}@media(max-width:800px){.factory-page{padding:10px}.hero{flex-direction:column;align-items:flex-start}.hero-actions{flex-wrap:wrap}.stats,.workspace{grid-template-columns:1fr}.pipeline{grid-column:auto}.approval{align-items:flex-start;flex-direction:column}}
 </style>

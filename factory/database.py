@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Iterator
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine
@@ -25,7 +24,28 @@ class Project(Base):
     title: Mapped[str] = mapped_column(String(100))
     template_id: Mapped[str] = mapped_column(String(80))
     messages: Mapped[list] = mapped_column(JSON)
+    clarification_status: Mapped[str] = mapped_column(String(32), default="NEEDS_CLARIFICATION", index=True)
+    clarification: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    clarification_provider_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ProviderProfile(Base):
+    __tablename__ = "rnd_provider_profile"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_rnd_provider_owner_name"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(80), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    provider: Mapped[str] = mapped_column(String(40), index=True)
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    model: Mapped[str] = mapped_column(String(200))
+    api_key_ciphertext: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class Run(Base):
@@ -43,6 +63,7 @@ class Run(Base):
     artifact: Mapped[str | None] = mapped_column(Text, nullable=True)
     artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     checks: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    stage_details: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -54,6 +75,9 @@ class Event(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("rnd_run.id"), index=True)
     level: Mapped[str] = mapped_column(String(16), default="info")
     message: Mapped[str] = mapped_column(Text)
+    stage: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    tool: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

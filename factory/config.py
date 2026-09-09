@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     task_queue: str = "ai-rnd-v1"
     token: str = ""
+    credential_encryption_key: str = ""
+    # Legacy/default LiteLLM proxy profile. UI-managed provider profiles take precedence.
     model_base_url: str = "http://localhost:4000/v1"
     model_api_key: str = ""
     model_name: str = "factory-planner"
@@ -33,6 +35,7 @@ class Settings(BaseSettings):
     docker_host_data_dir: str = ""
     openspec_required: bool = True
     diagrams_required: bool = True
+    structurizr_image: str = "structurizr/structurizr:2026.06.28-noble"
 
     def ensure_paths(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

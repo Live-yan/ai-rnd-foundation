@@ -5,17 +5,25 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from .database import Database, Project, Run, Event, Outbox
-from .schemas import ProjectInput, RunInput, ApprovalInput
+from .schemas import ApprovalInput, ClarificationResult, ProjectInput, RunInput
 
 TERMINAL = {"READY", "FAILED", "REJECTED", "CANCELLED"}
 
 
 def run_dict(run: Run) -> dict:
-    return {name: getattr(run, name) for name in ["id", "project_id", "status", "spec", "spec_digest", "decision",
-                                                "artifact_sha256", "checks", "error", "created_at", "updated_at"]} | {
-        "provider": run.request["provider"], "sandbox": run.request["sandbox"],
+    request = run.request or {}
+    return {name: getattr(run, name) for name in [
+        "id", "project_id", "status", "spec", "spec_digest", "decision", "artifact_sha256",
+        "checks", "stage_details", "error", "created_at", "updated_at"
+    ]} | {
+        "provider_id": request.get("provider_id"),
+        "provider": request.get("provider") or ("profile" if request.get("provider_id") else "unknown"),
+        "sandbox": request.get("sandbox", "static"),
+        "pipeline_mode": request.get("pipeline_mode", "core"),
+        "provision_coder": bool(request.get("provision_coder", False)),
         "download_available": run.status == "READY" and bool(run.artifact),
-        "quality_label": "scaffold_ready" if run.status == "READY" else None}
+        "quality_label": "scaffold_ready" if run.status == "READY" else None,
+    }
 
 
 class Repository:
@@ -26,15 +34,21 @@ class Repository:
         if value.template_id != "fastapiadmin-pg-v1":
             raise HTTPException(422, "This version implements only fastapiadmin-pg-v1")
         with self.db.session() as session:
-            p = Project(id=str(uuid4()), owner_id=owner, title=value.title, template_id=value.template_id,
-                        messages=[{"role": "user", "content": value.requirement}])
+            p = Project(
+                id=str(uuid4()), owner_id=owner, title=value.title, template_id=value.template_id,
+                messages=[{"role": "user", "kind": "requirement", "content": value.requirement}],
+                clarification_status="NEEDS_CLARIFICATION", clarification=None,
+            )
             session.add(p)
             session.flush()
             return self.project_dict(p)
 
     @staticmethod
     def project_dict(p: Project) -> dict:
-        return {k: getattr(p, k) for k in ["id", "title", "template_id", "messages", "created_at"]}
+        return {k: getattr(p, k) for k in [
+            "id", "title", "template_id", "messages", "clarification_status", "clarification",
+            "clarification_provider_id", "created_at", "updated_at"
+        ]}
 
     def get_project(self, owner: str, project_id: str) -> dict:
         with self.db.session() as session:
@@ -45,17 +59,55 @@ class Repository:
 
     def list_projects(self, owner: str) -> list[dict]:
         with self.db.session() as session:
-            return [self.project_dict(p) for p in session.scalars(select(Project).where(Project.owner_id == owner)
-                                                                 .order_by(Project.created_at.desc()).limit(100))]
+            return [self.project_dict(p) for p in session.scalars(
+                select(Project).where(Project.owner_id == owner).order_by(Project.updated_at.desc()).limit(100)
+            )]
 
     def add_message(self, owner: str, project_id: str, content: str) -> dict:
         with self.db.session() as session:
-            p = session.scalar(select(Project).where(Project.id == project_id, Project.owner_id == owner).with_for_update())
+            p = session.scalar(select(Project).where(
+                Project.id == project_id, Project.owner_id == owner
+            ).with_for_update())
             if not p:
                 raise HTTPException(404, "Project not found")
-            messages = [*p.messages, {"role": "user", "content": content}]
-            if len(messages) > 20 or sum(len(m["content"]) for m in messages) > 40000:
+            messages = [*p.messages, {"role": "user", "kind": "clarification_answer", "content": content}]
+            if len(messages) > 40 or sum(len(m.get("content", "")) for m in messages) > 70000:
                 raise HTTPException(422, "Conversation limit reached; create a new project with a consolidated requirement")
+            p.messages = messages
+            p.clarification_status = "NEEDS_CLARIFICATION"
+            p.clarification = None
+            p.clarification_provider_id = None
+            return self.project_dict(p)
+
+    def save_clarification(
+        self,
+        owner: str,
+        project_id: str,
+        result: ClarificationResult,
+        provider_id: str,
+    ) -> dict:
+        with self.db.session() as session:
+            p = session.scalar(select(Project).where(
+                Project.id == project_id, Project.owner_id == owner
+            ).with_for_update())
+            if not p:
+                raise HTTPException(404, "Project not found")
+            item = result.model_dump()
+            p.clarification = item
+            p.clarification_provider_id = provider_id
+            p.clarification_status = "READY" if result.ready else "WAITING_USER"
+            assistant = {
+                "role": "assistant", "kind": "clarification",
+                "content": result.understanding,
+                "questions": result.questions,
+                "acceptance_criteria": result.acceptance_criteria,
+                "risks": result.risks,
+            }
+            messages = list(p.messages)
+            if messages and messages[-1].get("role") == "assistant" and messages[-1].get("kind") == "clarification":
+                messages[-1] = assistant
+            else:
+                messages.append(assistant)
             p.messages = messages
             return self.project_dict(p)
 
@@ -77,12 +129,26 @@ class Repository:
                 p = session.scalar(select(Project).where(Project.id == project_id, Project.owner_id == owner))
                 if not p:
                     raise HTTPException(404, "Project not found")
-                r = Run(id=str(uuid4()), project_id=p.id, owner_id=owner, idempotency_key=value.idempotency_key,
-                        request=value.model_dump() | {"messages": p.messages, "template_id": p.template_id}, status="QUEUED")
+                legacy_demo = value.provider == "demo" and not value.provider_id
+                if (p.clarification_status != "READY" or not p.clarification) and not legacy_demo:
+                    raise HTTPException(409, "需求尚未完成 AI 澄清；先回答阻塞问题并让 AI 标记为 READY")
+                request = value.model_dump() | {
+                    "messages": p.messages,
+                    "template_id": p.template_id,
+                    "clarification": p.clarification or ({"ready": True, "legacy_demo_fixture": True} if legacy_demo else None),
+                    "clarification_provider_id": p.clarification_provider_id,
+                }
+                r = Run(
+                    id=str(uuid4()), project_id=p.id, owner_id=owner, idempotency_key=value.idempotency_key,
+                    request=request, status="QUEUED", stage_details={},
+                )
                 session.add(r)
                 session.flush()
                 session.add(Outbox(run_id=r.id, kind="start"))
-                session.add(Event(run_id=r.id, message="任务已持久化。等待 Temporal dispatcher 接收。"))
+                session.add(Event(
+                    run_id=r.id, stage="temporal", tool="temporal",
+                    message="任务已持久化并写入 outbox，等待 Temporal dispatcher 启动完整工具链。",
+                ))
                 return run_dict(r)
         except IntegrityError:
             found = existing()
@@ -100,8 +166,10 @@ class Repository:
     def list_runs(self, owner: str, project_id: str) -> list[dict]:
         self.get_project(owner, project_id)
         with self.db.session() as session:
-            return [run_dict(r) for r in session.scalars(select(Run).where(Run.project_id == project_id, Run.owner_id == owner)
-                                                        .order_by(Run.created_at.desc()).limit(100))]
+            return [run_dict(r) for r in session.scalars(
+                select(Run).where(Run.project_id == project_id, Run.owner_id == owner)
+                .order_by(Run.created_at.desc()).limit(100)
+            )]
 
     def decide(self, owner: str, run_id: str, value: ApprovalInput) -> dict:
         with self.db.session() as session:
@@ -119,12 +187,17 @@ class Repository:
                 raise HTTPException(422, "Review and explicitly accept unsupported features before approval")
             r.decision = decision
             session.add(Outbox(run_id=r.id, kind="decision"))
-            session.add(Event(run_id=r.id, message="人工决定已记录，并进入可靠信号发件箱。"))
+            session.add(Event(
+                run_id=r.id, stage="human_gate", tool="temporal", message="人工决定已记录并进入可靠信号发件箱。"
+            ))
             return run_dict(r)
 
     def events(self, owner: str, run_id: str, after: int = 0) -> list[dict]:
         self.get_run(owner, run_id)
         with self.db.session() as session:
-            return [{"id": e.id, "level": e.level, "message": e.message, "created_at": e.created_at}
-                    for e in session.scalars(select(Event).where(Event.run_id == run_id, Event.id > after)
-                                             .order_by(Event.id).limit(200))]
+            return [{
+                "id": e.id, "level": e.level, "message": e.message, "stage": e.stage,
+                "tool": e.tool, "payload": e.payload, "created_at": e.created_at,
+            } for e in session.scalars(
+                select(Event).where(Event.run_id == run_id, Event.id > after).order_by(Event.id).limit(300)
+            )]

@@ -62,14 +62,7 @@ def add_frontend_route(
     title: str,
     icon: str = 'ri:code-box-line',
 ) -> None:
-    """Install a first-class mixed-mode frontend route.
-
-    FastapiAdmin authorizes navigation against MenuProcessor's menu list. A direct
-    ``router.addRoute`` call can render a component, but the global route guard will
-    still reject its path and the sidebar will never see it. Register extensions via
-    ``builtinFrontendRoutes`` so menu rendering, permission validation and
-    RouteRegistry all consume the same route definition.
-    """
+    """Install one first-class mixed-mode route (used by generated products and tests)."""
     view_dir = target / f'frontend/web/src/views/{name}'
     view_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, view_dir / f'{component_name}.vue')
@@ -102,6 +95,55 @@ def add_frontend_route(
         '];'
     )
     menu_path.write_text(text.replace(needle, route, 1), encoding='utf-8')
+
+
+def install_factory_frontend(target: Path) -> None:
+    """Install the FastapiAdmin-native AI R&D workbench as three menu routes plus a typed API module."""
+    files = [
+        ('factory', 'FactoryConsole.vue', ROOT / 'overlays/platform/FactoryConsole.vue'),
+        ('factory-providers', 'ProviderManager.vue', ROOT / 'overlays/platform/ProviderManager.vue'),
+        ('factory-toolchain', 'ToolchainCenter.vue', ROOT / 'overlays/platform/ToolchainCenter.vue'),
+    ]
+    for view, filename, source in files:
+        view_dir = target / f'frontend/web/src/views/{view}'
+        view_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, view_dir / filename)
+
+    api_dir = target / 'frontend/web/src/api/module_factory'
+    api_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / 'overlays/platform/api/index.ts', api_dir / 'index.ts')
+
+    menu_path = target / 'frontend/web/src/router/MenuProcessor.ts'
+    text = menu_path.read_text(encoding='utf-8')
+    marker = '// AI-RND-FRONTEND-ROUTE:factory:v2'
+    if marker in text:
+        return
+    needle = 'export const builtinFrontendRoutes: AppRouteRecord[] = [];'
+    if needle not in text:
+        raise RuntimeError('builtinFrontendRoutes extension point changed; refusing to patch factory workbench blindly')
+    routes = [
+        ('/factory', 'rnd-factory', 'factory/FactoryConsole', 'AI 研发工作台', 'ri:code-box-line'),
+        ('/factory-providers', 'rnd-factory-providers', 'factory-providers/ProviderManager', '模型供应商', 'ri:brain-line'),
+        ('/factory-toolchain', 'rnd-factory-toolchain', 'factory-toolchain/ToolchainCenter', '研发工具链', 'ri:flow-chart'),
+    ]
+    lines = [marker, '// AI-RND-FASTAPIADMIN-WORKBENCH:v3', 'export const builtinFrontendRoutes: AppRouteRecord[] = [']
+    for path, name, component, title, icon in routes:
+        lines += [
+            '  {',
+            f'    path: {json.dumps(path, ensure_ascii=False)},',
+            f'    name: {json.dumps(name, ensure_ascii=False)},',
+            f'    component: {json.dumps(component, ensure_ascii=False)},',
+            '    meta: {',
+            f'      title: {json.dumps(title, ensure_ascii=False)},',
+            f'      icon: {json.dumps(icon, ensure_ascii=False)},',
+            '      hidden: false,',
+            '      isHide: false,',
+            '      keepAlive: true,',
+            '    },',
+            '  },',
+        ]
+    lines.append('];')
+    menu_path.write_text(text.replace(needle, '\n'.join(lines), 1), encoding='utf-8')
 
 
 def fetch_upstream(target: Path) -> None:
@@ -139,15 +181,7 @@ def assemble(source: Path, destination: Path, *, replace: bool = False) -> None:
             raise RuntimeError('runtime already exists. Use --replace-runtime only after saving local edits.')
         shutil.rmtree(destination)
     copy_source(source, destination)
-    add_frontend_route(
-        destination,
-        'factory',
-        'FactoryConsole',
-        ROOT / 'overlays/platform/FactoryConsole.vue',
-        title='AI 软件开发平台',
-    )
-    # Build-only configuration: no credentials and no cross-origin API.
-    # copy_source intentionally excludes upstream .env files, so access mode must be explicit.
+    install_factory_frontend(destination)
     (destination / 'frontend/web/.env.production').write_text(
         'VITE_APP_ENV=prod\nVITE_APP_TITLE=AI R&D Factory\n'
         'VITE_ACCESS_MODE=mixed\n'

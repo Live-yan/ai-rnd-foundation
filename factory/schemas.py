@@ -10,6 +10,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 RESERVED = {"id", "owner_id", "created_at", "updated_at", "metadata", "schema", "type", "user"}
+ProviderKind = Literal[
+    "openai", "anthropic", "azure_openai", "google", "deepseek", "groq",
+    "openrouter", "ollama", "mistral", "xai", "litellm_proxy", "custom_openai",
+]
+PipelineMode = Literal["core", "full"]
 
 
 def identifier(value: str) -> str:
@@ -38,7 +43,7 @@ class FieldSpec(StrictModel):
         return value
 
     @model_validator(mode="after")
-    def check_reference(self) -> FieldSpec:
+    def check_reference(self) -> "FieldSpec":
         if self.kind == "reference":
             if not self.references:
                 raise ValueError("A reference field must specify references")
@@ -62,7 +67,7 @@ class EntitySpec(StrictModel):
         return value
 
     @model_validator(mode="after")
-    def unique_fields(self) -> EntitySpec:
+    def unique_fields(self) -> "EntitySpec":
         names = [f.name for f in self.fields]
         if len(names) != len(set(names)):
             raise ValueError("Duplicate field names")
@@ -77,7 +82,7 @@ class ProjectSpec(StrictModel):
     unsupported_features: list[str] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
-    def references_and_cycles(self) -> ProjectSpec:
+    def references_and_cycles(self) -> "ProjectSpec":
         names = [e.name for e in self.entities]
         if len(names) != len(set(names)):
             raise ValueError("Duplicate entity names")
@@ -93,7 +98,7 @@ class ProjectSpec(StrictModel):
 
         def visit(n: str) -> None:
             if n in visiting:
-                raise ValueError("v0.1 supports acyclic parent/child relationships only")
+                raise ValueError("v0.2 supports acyclic parent/child relationships only")
             if n in visited:
                 return
             visiting.add(n)
@@ -123,10 +128,64 @@ class MessageInput(StrictModel):
     content: str = Field(min_length=1, max_length=16000)
 
 
+class ProviderInput(StrictModel):
+    name: str = Field(min_length=1, max_length=80)
+    provider: ProviderKind
+    base_url: str = Field(default="", max_length=500)
+    api_key: str = Field(default="", max_length=4096)
+    model: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+    is_default: bool = False
+    temperature: float = Field(default=0.1, ge=0, le=2)
+    max_tokens: int = Field(default=6000, ge=256, le=128000)
+
+
+class ProviderUpdate(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    provider: ProviderKind | None = None
+    base_url: str | None = Field(default=None, max_length=500)
+    api_key: str | None = Field(default=None, max_length=4096)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    enabled: bool | None = None
+    is_default: bool | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_tokens: int | None = Field(default=None, ge=256, le=128000)
+
+
+class ClarifyInput(StrictModel):
+    provider_id: str | None = Field(default=None, max_length=36)
+
+
+class ClarificationResult(StrictModel):
+    ready: bool
+    understanding: str = Field(min_length=1, max_length=4000)
+    questions: list[str] = Field(default_factory=list, max_length=12)
+    assumptions: list[str] = Field(default_factory=list, max_length=20)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=30)
+    risks: list[str] = Field(default_factory=list, max_length=20)
+    suggested_stack: list[str] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def ready_is_actionable(self) -> "ClarificationResult":
+        if self.ready and self.questions:
+            raise ValueError("A ready clarification cannot contain unanswered blocking questions")
+        if self.ready and not self.acceptance_criteria:
+            raise ValueError("A ready clarification needs explicit acceptance criteria")
+        if not self.ready and not self.questions:
+            raise ValueError("A non-ready clarification must ask at least one blocking question")
+        return self
+
+
 class RunInput(StrictModel):
-    provider: Literal["demo", "litellm"] = "demo"
+    provider_id: str | None = Field(default=None, max_length=36)
+    # Backward-compatible field for older API clients. New UI uses provider_id only.
+    provider: Literal["demo", "litellm"] | None = "demo"
+    # Legacy raw /factory-api clients keep the original conservative defaults.
+    # The new FastapiAdmin workbench sends the full-mode choices explicitly.
     use_serena: bool = False
     sandbox: Literal["static", "docker", "cube"] = "static"
+    pipeline_mode: PipelineMode = "core"
+    provision_coder: bool = False
     idempotency_key: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
 
 
@@ -137,10 +196,10 @@ class ApprovalInput(StrictModel):
 
 
 def demo_spec() -> ProjectSpec:
-    """Explicit fixed fixture. It does NOT infer arbitrary natural-language requirements."""
+    """Test fixture only. The interactive demo no longer substitutes this for AI clarification."""
     return ProjectSpec.model_validate({
         "slug": "device-maintenance", "title": "设备检修管理示例",
-        "summary": "固定离线示例：设备及检修记录。真实需求请使用 LiteLLM 模式。",
+        "summary": "测试夹具：设备及检修记录。交互式演示必须先经过真实 AI 澄清。",
         "entities": [
             {"name": "device", "label": "设备", "fields": [
                 {"name": "name", "label": "设备名称", "kind": "string"},
@@ -151,5 +210,5 @@ def demo_spec() -> ProjectSpec:
                 {"name": "performed_on", "label": "检修日期", "kind": "date"},
                 {"name": "notes", "label": "检修内容", "kind": "text"}]}
         ],
-        "unsupported_features": ["演示模式不解析自由文本，生成的是固定设备检修示例。", "不包含审批流、支付、实时设备采集或生产级业务验收。"]
+        "unsupported_features": ["测试夹兛不代表 AI 已分析自由文本需求。"]
     })
