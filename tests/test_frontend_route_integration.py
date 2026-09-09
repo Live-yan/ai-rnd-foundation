@@ -64,7 +64,7 @@ def test_platform_build_explicitly_enables_mixed_access_mode() -> None:
 
     assert "VITE_ACCESS_MODE=mixed" in bootstrap
     assert "AI-RND-FRONTEND-ROUTE:factory:v2" in dockerfile
-    assert "router.addRoute" not in bootstrap
+    assert "AI-RND-EXTENSION:" not in bootstrap
 
 
 def test_generated_product_uses_same_menu_permission_pipeline() -> None:
