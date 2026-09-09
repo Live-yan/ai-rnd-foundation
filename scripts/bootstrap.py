@@ -28,7 +28,20 @@ def copy_source(source: Path, destination: Path) -> None:
     shutil.copytree(source, destination, ignore=ignore)
 
 
+def frontend_public_base() -> str:
+    root_path = str(MANIFEST['root_path']).rstrip('/')
+    frontend_mount = '/' + str(MANIFEST['frontend_mount']).strip('/')
+    expected = f'{root_path}{frontend_mount}/'
+    configured = str(MANIFEST['frontend_public_base'])
+    if configured != expected:
+        raise RuntimeError(
+            f'Invalid template frontend_public_base: expected {expected!r}, got {configured!r}'
+        )
+    return configured
+
+
 def check_contract(source: Path) -> None:
+    frontend_public_base()
     for rel in MANIFEST['required_paths']:
         if not (source / rel).is_file():
             raise RuntimeError(f'Upstream contract changed/missing: {rel}')
@@ -87,7 +100,9 @@ def assemble(source: Path, destination: Path, *, replace: bool = False) -> None:
     add_route(destination, 'factory', 'FactoryConsole', ROOT / 'overlays/platform/FactoryConsole.vue')
     # Build-only configuration: no credentials and no cross-origin API.
     (destination / 'frontend/web/.env.production').write_text(
-        'VITE_APP_ENV=prod\nVITE_APP_TITLE=AI R&D Factory\nVITE_API_URL=/\n'
+        'VITE_APP_ENV=prod\nVITE_APP_TITLE=AI R&D Factory\n'
+        f'VITE_BASE_URL={frontend_public_base()}\n'
+        f'VITE_APP_BASE_API={MANIFEST["root_path"]}\n'
         'VITE_API_BASE_URL=http://127.0.0.1:8000\nVITE_DROP_CONSOLE=true\n', encoding='utf-8')
     print(f'Assembled: {destination}\nPinned upstream: {MANIFEST["commit"]}')
 

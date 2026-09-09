@@ -21,7 +21,7 @@ bash scripts/start.sh
 
 Docker Desktop 必须已运行并启用此 Ubuntu 的 WSL 集成；第一次需要网络下载。构建失败时查看原始错误，按 `docs/TROUBLESHOOTING.md` 排查，不跳过类型检查或质量门禁。
 
-打开 `http://localhost:8000/web/`，按 FastapiAdmin 初始化账号登录并修改密码，然后打开 `http://localhost:8000/web/#/factory`。
+FastapiAdmin 使用 `ROOT_PATH=/api/v1`，因此本地直接访问 Uvicorn 时，前端公开路径是 `http://localhost:8000/api/v1/web/`。登录并修改初始化密码后，打开 `http://localhost:8000/api/v1/web/#/factory`。不要使用旧的 `/web/` 地址；它不包含 FastAPI root path。
 
 建项目 → 选择 demo 或已配置的 litellm → 生成规格 → 查看未支持项 → 明确批准 → 等待源码检查 → 下载 → 新目录启动产品。
 

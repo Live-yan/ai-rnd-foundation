@@ -19,5 +19,26 @@ jobs:
         with:
           name: contract-results
           path: reports/
-  # Deliberately not claiming a real Docker + model + external-services CI run.
-  # Add protected-environment jobs only after secrets, budgets, and sandbox policy are configured.
+
+  frontend-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the real FastapiAdmin frontend stage
+        run: docker build --target frontend -t ai-rnd-frontend-smoke .
+      - name: Extract built frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker create ai-rnd-frontend-smoke)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/web/dist" ./frontend-dist
+          docker rm "$cid" >/dev/null
+          trap - EXIT
+      - name: Verify root-path-aware asset URLs
+        run: python3 scripts/verify_frontend_dist.py frontend-dist /api/v1/web/
+
+  # Model/sandbox/external-service E2E remains intentionally separate because it needs
+  # protected secrets, budgets, and sandbox policy. The frontend smoke above is secret-free
+  # and builds the actual pinned FastapiAdmin frontend used by the platform.
