@@ -6,7 +6,23 @@
 
 **git fetch 下载失败。** 检查 DNS、代理、证书、GitHub 访问与固定 SHA 是否可取。初始包不包含整个上游，网络是必要条件。不要私自改 master 以绕过失败，否则失去版本与 overlay 兼容保证。
 
-**uv 解析冲突或 package not found。** 看具体依赖名称和索引。联合环境会保留上游 pin；不得无证据把上游版本降级。查看 `runtime/combined/pyproject.toml`，按官方仓库确认该提交是否要求特定索引/平台。网络镜像缺包和真实依赖冲突不是同一问题。
+**uv 解析冲突或 package not found。** 看具体依赖名称和索引。联合环境会保留上游 pin；不得无证据把上游版本降级。查看 `runtime/combined/pyproject.toml`，按官方仓库确认该提交是否要求特定索引/平台。网络镜像缺包和真实依赖冲突不是同一问题。Docker-first 启动路径不要求宿主机预装 uv，镜像内部会使用固定 uv 版本；`doctor.py` 中宿主机 `uv: missing` 本身不是启动阻塞。
+
+**`init_env.py` 报 `FileExistsError: .../data`。** 这表示 `data` 这个路径已经存在，但不是可用目录，常见于覆盖旧工程后留下普通文件、坏符号链接或旧 bind-mount 链接。新版先检查 `data/` 再写 `.env`，不会再留下“`.env` 已生成但运行目录没有准备好”的半初始化状态。先执行：
+
+```bash
+python3 scripts/doctor.py
+ls -ld data 2>/dev/null || true
+file data 2>/dev/null || true
+```
+
+如果 `doctor.py` 的 `data_path.state` 是 `file`、`broken_symlink`、`symlink_file` 或 `other`，使用非破坏修复：
+
+```bash
+python3 scripts/init_env.py --repair-data
+```
+
+脚本不会删除原对象，而是先把它移动为 `data.conflict-<UTC时间>`，再创建新的 `data/`。如果 `data` 本来就是正常目录（包括指向目录的有效符号链接），即使带 `--repair-data` 也不会替换或清空其中内容。修复后再次运行 `python3 scripts/doctor.py`，应看到 `data_path.state` 为 `directory` 或 `symlink_directory`。
 
 **pnpm lock 不匹配或 vue-tsc 失败。** 保留错误文件名，先检查 Node22、pnpm9.15.3 和下载的固定上游是否一致，再区分原上游代码还是 overlay 的 TypeScript 错误。不得删除 vue-tsc 命令来假装构建成功。overlay 在本次环境只做了 TypeScript 语法转译检查，没有运行完整 Vue 编译器。
 
