@@ -136,6 +136,7 @@ class ProviderInput(StrictModel):
     model: str = Field(min_length=1, max_length=200)
     enabled: bool = True
     is_default: bool = False
+    api_version: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9.\-]*$")
     temperature: float = Field(default=0.1, ge=0, le=2)
     max_tokens: int = Field(default=6000, ge=256, le=128000)
 
@@ -148,6 +149,7 @@ class ProviderUpdate(StrictModel):
     model: str | None = Field(default=None, min_length=1, max_length=200)
     enabled: bool | None = None
     is_default: bool | None = None
+    api_version: str | None = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9.\-]*$")
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=256, le=128000)
 
@@ -210,5 +212,5 @@ def demo_spec() -> ProjectSpec:
                 {"name": "performed_on", "label": "检修日期", "kind": "date"},
                 {"name": "notes", "label": "检修内容", "kind": "text"}]}
         ],
-        "unsupported_features": ["测试夹兛不代表 AI 已分析自由文本需求。"]
+        "unsupported_features": ["测试夹具不代表 AI 已分析自由文本需求。"]
     })

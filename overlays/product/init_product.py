@@ -21,4 +21,4 @@ if not local.exists():
 frontend = root / 'frontend/web/.env.production'
 if not frontend.exists():
     frontend.write_text((root / 'frontend/web/.env.production.example').read_text())
-print('Initialized. Docker: docker compose up --build -d. Open http://localhost:8010/web/#/business after login.')
+print('Initialized. Docker: docker compose up --build -d. Open http://localhost:8010/api/v1/web/#/business after login.')

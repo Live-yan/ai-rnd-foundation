@@ -36,11 +36,11 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
         "temporal": _module("temporalio") and bool(settings.temporal_address),
         "openspec": bool(shutil.which("openspec")),
         "diagrams": _module("diagrams") and bool(shutil.which("dot")),
-        "structurizr": bool(settings.structurizr_image and settings.docker_host_data_dir),
+        "structurizr": bool(shutil.which("docker") and settings.structurizr_image and settings.docker_host_data_dir),
         "toolhive": bool(settings.serena_url),
         "serena": bool(settings.serena_url),
         "cube": bool(settings.cube_api_url and settings.cube_api_key and settings.cube_template),
-        "coder": bool(settings.coder_url and settings.coder_token and settings.coder_template_id),
+        "coder": bool(settings.coder_url and settings.coder_token and settings.coder_template_id and settings.coder_auto_import and settings.coder_factory_url),
     }
     execution = {
         "fastapiadmin": "always", "langgraph": "always", "litellm": "clarify+plan", "temporal": "always",
@@ -53,7 +53,7 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
         "toolhive": "按 integrations/toolhive/README.md 启动 ToolHive 代理。",
         "serena": "FACTORY_SERENA_URL 必须指向 ToolHive 管理的只读 Serena MCP。",
         "cube": "配置 Cube API URL / Key / Template；完整模式默认使用 Cube。",
-        "coder": "配置 Coder URL / Token / Template；自动创建仅允许 FACTORY_CODER_OWNER_ID。",
+        "coder": "部署 integrations/coder 中的自动导入模板；配置 Coder URL / Token / Template、CODER_AUTO_IMPORT、CODER_FACTORY_URL 和 CODER_OWNER_ID。",
     }
     result = []
     for key, name, role in TOOL_DESCRIPTIONS:
@@ -71,6 +71,8 @@ def require_full_toolchain(settings: Settings, *, owner: str, provider_count: in
         raise ValueError("完整工具链必须使用 CubeSandbox；Docker/static 仅用于基础模式")
     if provision_coder:
         required.append("coder")
+        if not settings.coder_auto_import or not settings.coder_factory_url or len(settings.credential_encryption_key) < 24:
+            raise ValueError("完整模式需要 Coder 自动导入模板及 FACTORY_CODER_AUTO_IMPORT / FACTORY_CODER_FACTORY_URL")
         if not settings.coder_owner_id or owner != settings.coder_owner_id:
             raise ValueError("完整模式自动创建 Coder 仅允许 FACTORY_CODER_OWNER_ID 指定的管理员")
     missing = [rows[key]["name"] for key in required if not rows[key]["configured"]]
@@ -85,13 +87,23 @@ def validate_structurizr(analysis_root: Path, run_id: str, settings: Settings) -
     host_arch = Path(settings.docker_host_data_dir) / "runs" / run_id / "analysis" / "architecture"
     if not analysis_root.joinpath("architecture/workspace.dsl").is_file():
         raise RuntimeError("Generated Structurizr workspace.dsl is missing")
+    if not host_arch.is_absolute() or "," in str(host_arch):
+        raise RuntimeError("Structurizr requires an absolute Docker host-side path without commas")
+    name = "rnd-c4-" + run_id
     args = [
-        "docker", "run", "--rm", "--network", "none", "--read-only", "--cap-drop=ALL",
+        "docker", "run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop=ALL",
+        "--memory=1g", "--cpus=1", "--pids-limit=256", "--tmpfs", "/tmp:rw,nosuid,size=128m",
         "--security-opt=no-new-privileges", "--mount", f"type=bind,source={host_arch},target=/usr/local/structurizr,readonly",
         settings.structurizr_image, "validate", "-workspace", "workspace.dsl",
     ]
-    result = subprocess.run(args, text=True, capture_output=True, timeout=90, env={"PATH": os.environ.get("PATH", "")})
-    if result.returncode:
-        raise RuntimeError("Structurizr DSL validation failed: " + (result.stderr + result.stdout)[-1800:])
-    return {"tool": "structurizr", "validated": True, "image": settings.structurizr_image,
-            "output": (result.stdout + result.stderr)[-1200:]}
+    try:
+        result = subprocess.run(args, text=True, capture_output=True, timeout=90, env={"PATH": os.environ.get("PATH", "")})
+        if result.returncode:
+            raise RuntimeError("Structurizr DSL validation failed: " + (result.stderr + result.stdout)[-1800:])
+        return {"tool": "structurizr", "validated": True, "image": settings.structurizr_image,
+                "output": (result.stdout + result.stderr)[-1200:]}
+    finally:
+        try:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=15)
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # Surface the primary failure; operators must inspect a disconnected daemon.

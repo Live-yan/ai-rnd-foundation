@@ -12,6 +12,7 @@ from .artifacts import build_architecture, build_openspec
 from .config import Settings
 from .database import Database, Event, Run
 from .generator import generate_product
+from .handoff import issue_source_ticket
 from .packaging import package_product
 from .planner import plan
 from .providers.coder import CoderClient
@@ -36,7 +37,7 @@ class Activities:
                 raise ValueError("Unknown run")
             return {
                 "request": row.request, "owner": row.owner_id, "spec": row.spec, "digest": row.spec_digest,
-                "checks": row.checks, "stage_details": row.stage_details or {}, "status": row.status,
+                "artifact_sha256": row.artifact_sha256, "checks": row.checks, "stage_details": row.stage_details or {}, "status": row.status,
             }
 
     def stage(self, run_id: str, stage: str, status: str, message: str, *, tool: str,
@@ -47,7 +48,7 @@ class Activities:
                 raise ValueError("Unknown run")
             row.status = status
             details = dict(row.stage_details or {})
-            details[stage] = {"status": status, "tool": tool, **(detail or {})}
+            details[stage] = {**(detail or {}), "status": status, "tool": tool}
             row.stage_details = details
             session.add(Event(run_id=run_id, level=level, stage=stage, tool=tool, payload=detail, message=message))
 
@@ -64,7 +65,9 @@ class Activities:
         return {"context": context[:16000]}
 
     @activity.defn(name="rnd.plan")
-    async def plan_activity(self, value: dict) -> dict:
+    async def plan_activity(self, value: dict | str) -> dict:
+        legacy = isinstance(value, str)
+        value = {"run_id": value} if legacy else value
         run_id = value["run_id"]
         info = self.get(run_id)
         if info["spec"]:
@@ -84,7 +87,7 @@ class Activities:
             row.spec = spec.model_dump(); row.spec_digest = spec.digest()
             details = dict(row.stage_details or {})
             details["plan"] = {"status": "PLANNED", "tool": "langgraph+litellm", "digest": spec.digest()}
-            row.stage_details = details; row.status = "PLANNED"
+            row.stage_details = details; row.status = "AWAITING_APPROVAL" if legacy else "PLANNED"
             session.add(Event(run_id=run_id, stage="plan", tool="langgraph+litellm", message="结构化规格已保存，开始生成可审阅的规格与架构包。"))
         return {"digest": spec.digest()}
 
@@ -108,7 +111,7 @@ class Activities:
         root = run_path(self.settings.data_dir, run_id) / "analysis"
         self.stage(run_id, "openspec", "SPEC_PACK_BUILDING", "生成 OpenSpec proposal/design/tasks/spec 并执行 strict validate。", tool="openspec")
         root.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(build_openspec, root, spec)
+        await asyncio.to_thread(build_openspec, root, spec, generated=False, clarification=info["request"].get("clarification"))
         openspec = await asyncio.to_thread(self._validate_openspec, root)
         self.stage(run_id, "openspec", "SPEC_PACK_READY", "OpenSpec 规格包已通过严格校验。", tool="openspec", detail=openspec)
         self.stage(run_id, "architecture", "ARCHITECTURE_BUILDING", "从同一 ProjectSpec 生成 Structurizr C4 DSL、ER 图和 mingrammer/diagrams 部署图。", tool="structurizr+diagrams")
@@ -131,6 +134,20 @@ class Activities:
         self.stage(run_id, "generate", "GENERATING", "从固定 FastapiAdmin 模板生成后端扩展、迁移、Vue 页面和交付架构包。", tool="fastapiadmin+factory")
         product = run_path(self.settings.data_dir, run_id) / "product"
         result = await asyncio.to_thread(generate_product, ProjectSpec.model_validate(info["spec"]), self.settings.upstream_dir, product, diagrams_required=self.settings.diagrams_required)
+        # Keep the approved requirements and parser receipt in the delivered source, not only the preview.
+        await asyncio.to_thread(build_openspec, product, ProjectSpec.model_validate(info["spec"]),
+                                clarification=info["request"].get("clarification"))
+        analysis_dsl = run_path(self.settings.data_dir, run_id) / "analysis/architecture/workspace.dsl"
+        architecture = info["stage_details"].get("architecture", {})
+        if architecture.get("c4_dsl") == "parser_validated":
+            if analysis_dsl.read_bytes() != (product / "architecture/workspace.dsl").read_bytes():
+                raise RuntimeError("Delivered C4 DSL differs from the approved, validated source")
+            import json
+            receipt_path = product / "delivery/receipt.json"
+            receipt = json.loads(receipt_path.read_text())
+            receipt["architecture"]["c4_dsl"] = "parser_validated"
+            receipt["architecture"]["structurizr"] = architecture["structurizr"]
+            receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
         self.stage(run_id, "generate", "GENERATED", "FastapiAdmin 产品源码已物化。", tool="fastapiadmin+factory", detail={"status": result.get("status")})
         return result
 
@@ -155,6 +172,10 @@ class Activities:
         with self.db.session() as session:
             row = session.get(Run, run_id); row.artifact = str((base / "product.zip").relative_to(self.settings.data_dir.resolve())); row.artifact_sha256 = sha; row.status = "PACKAGED"
         self.stage(run_id, "package", "PACKAGED", "交付 ZIP 已生成并记录 SHA-256。", tool="factory-packager", detail={"sha256": sha})
+        # Pre-upgrade histories have no rnd.ready activity; preserve their terminal semantics.
+        if "pipeline_mode" not in info["request"]:
+            with self.db.session() as session:
+                session.get(Run, run_id).status = "READY"
         return {"sha256": sha}
 
     @activity.defn(name="rnd.coder")
@@ -165,20 +186,38 @@ class Activities:
         if not self.settings.coder_owner_id or info["owner"] != self.settings.coder_owner_id:
             raise RuntimeError("Coder auto provisioning is restricted to FACTORY_CODER_OWNER_ID")
         self.stage(run_id, "coder", "CODER_PROVISIONING", "通过 Coder API 创建长期 IDE 工作区。", tool="coder")
-        result = await CoderClient(self.settings).create_workspace(run_id)
+        source = None
+        if self.settings.coder_auto_import:
+            source = {"url": self.settings.coder_factory_url.rstrip("/") + "/factory/transfer/" + run_id,
+                      "sha256": info["artifact_sha256"],
+                      "token": issue_source_ticket(run_id, info["artifact_sha256"], self.settings)}
+        result = await CoderClient(self.settings).create_workspace(run_id, source=source)
+        if req.get("pipeline_mode") == "full" and result.get("source_import") != "sha256_verified":
+            raise RuntimeError("Complete pipeline requires verified Coder source import")
         with self.db.session() as session:
             row = session.get(Run, run_id); checks = dict(row.checks or {}); checks["coder"] = result; row.checks = checks
-        self.stage(run_id, "coder", "CODER_READY", "Coder 工作区已创建；源码导入状态会明确展示，不伪装为已完成。", tool="coder", detail=result)
+        self.stage(run_id, "coder", "CODER_READY", "Coder 已返回工作区状态与源码导入回执。", tool="coder", detail=result)
         return result
 
     @activity.defn(name="rnd.ready")
     async def ready_activity(self, run_id: str) -> dict:
         with self.db.session() as session:
             row = session.get(Run, run_id)
-            if not row.artifact:
-                raise RuntimeError("Cannot mark run READY without an artifact")
+            if not row.artifact or not row.checks or not (row.decision or {}).get("approve"):
+                raise RuntimeError("Cannot mark run READY without approval, verification and an artifact")
+            details = row.stage_details or {}
+            if row.request.get("pipeline_mode") == "full":
+                if not details.get("context", {}).get("used"):
+                    raise RuntimeError("Full mode requires a real Serena context receipt")
+                if details.get("architecture", {}).get("c4_dsl") != "parser_validated":
+                    raise RuntimeError("Full mode requires a Structurizr validation receipt")
+                if row.checks.get("sandbox", {}).get("provider") != "cube":
+                    raise RuntimeError("Full mode requires a CubeSandbox receipt")
+                if row.checks.get("coder", {}).get("source_import") != "sha256_verified":
+                    raise RuntimeError("Full mode requires verified Coder source import")
             row.status = "READY"
-            session.add(Event(run_id=run_id, stage="complete", tool="temporal", message="完整流水线已结束，源码包可下载。请继续执行 quality.json 中未完成的生产验收。"))
+            row.stage_details = {**details, "complete": {"status": "READY", "tool": "temporal"}}
+            session.add(Event(run_id=run_id, stage="complete", tool="temporal", message="本次所选流水线已结束，源码包可下载。源码交付与生产验收状态分别记录。"))
         return {"status": "READY"}
 
     @activity.defn(name="rnd.terminal")
@@ -189,5 +228,13 @@ class Activities:
         with self.db.session() as session:
             row = session.get(Run, run_id)
             if row.status == "READY": return
+            details = dict(row.stage_details or {})
+            if status == "FAILED":
+                for key, detail in details.items():
+                    if detail.get("status") in {"CONTEXT_LOADING", "PLANNING", "SPEC_PACK_BUILDING",
+                                               "ARCHITECTURE_BUILDING", "GENERATING", "VERIFYING",
+                                               "PACKAGING", "CODER_PROVISIONING"}:
+                        details[key] = {**detail, "status": "FAILED", "error": message}
+            row.stage_details = details
             row.status = status; row.error = message or None
             session.add(Event(run_id=run_id, level="error" if status == "FAILED" else "info", stage="terminal", tool="temporal", message=f"任务结束：{status}。{message}"))

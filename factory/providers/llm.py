@@ -33,14 +33,16 @@ _PROVIDER_PREFIX = {
 
 
 def litellm_model(profile: ProviderRuntime) -> str:
+    prefix = _PROVIDER_PREFIX.get(profile.provider, "openai")
     model = profile.model.strip()
-    if profile.provider in {"litellm_proxy", "custom_openai"} or "/" in model:
+    if model.startswith(prefix + "/"):
         return model
-    prefix = _PROVIDER_PREFIX.get(profile.provider)
-    return f"{prefix}/{model}" if prefix else model
+    return f"{prefix}/{model}"
 
 
 def _extract_json(text: str) -> dict[str, Any]:
+    if len(text) > 100000:
+        raise ValueError("Model response exceeds the 100,000 character limit")
     value = text.strip()
     if value.startswith("```"):
         value = re.sub(r"^```(?:json)?\s*|\s*```$", "", value, flags=re.IGNORECASE | re.DOTALL).strip()
@@ -74,8 +76,16 @@ class ModelGateway:
             from litellm import acompletion
         except ImportError as exc:
             raise RuntimeError("LiteLLM SDK is unavailable; rebuild the platform image after updating dependencies") from exc
+        if not profile.api_key and profile.provider not in {"ollama", "custom_openai", "litellm_proxy"}:
+            raise ValueError("The selected cloud provider requires its own API key")
+        if profile.provider == "azure_openai" and not profile.api_version:
+            raise ValueError("Azure OpenAI requires an explicit API version")
         kwargs: dict[str, Any] = {
             "model": litellm_model(profile),
+            "custom_llm_provider": _PROVIDER_PREFIX.get(profile.provider, "openai"),
+            "api_key": profile.api_key or "local-no-key",
+            "num_retries": 0,
+            "drop_params": True,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -84,8 +94,8 @@ class ModelGateway:
             "max_tokens": max_tokens or profile.max_tokens,
             "timeout": self.settings.model_timeout,
         }
-        if profile.api_key:
-            kwargs["api_key"] = profile.api_key
+        if profile.api_version:
+            kwargs["api_version"] = profile.api_version
         if profile.base_url:
             kwargs["api_base"] = profile.base_url.rstrip("/")
         if profile.provider in {"openai", "azure_openai", "deepseek", "groq", "openrouter", "xai", "litellm_proxy", "custom_openai"}:
@@ -95,7 +105,7 @@ class ModelGateway:
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             suffix = f" (HTTP {status})" if isinstance(status, int) else ""
-            raise RuntimeError(f"Model provider request failed{suffix}; inspect the provider/LiteLLM logs locally") from exc
+            raise RuntimeError(f"Model provider request failed{suffix}; check provider configuration and quota") from None
         content = response.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("Model returned an empty response")
@@ -125,7 +135,9 @@ class ModelGateway:
             {"task": "provider connectivity test"},
             max_tokens=128,
         )
-        return {"ok": bool(result.get("ok", True)), "message": str(result.get("message", "Model responded"))[:300]}
+        if result.get("ok") is not True:
+            raise RuntimeError("Provider test did not return the required ok=true acknowledgement")
+        return {"ok": True, "message": "模型已完成真实 JSON 响应测试"}
 
 
 class LiteLLMPlanner:

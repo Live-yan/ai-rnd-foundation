@@ -17,6 +17,10 @@ def _new_values(password: str | None = None) -> dict[str, str]:
         "FACTORY_DATABASE_URL": f"postgresql+psycopg://factory:{password}@postgres:5432/factory",
         "FACTORY_MODEL_API_KEY": "",
         "FACTORY_MODEL_NAME": "factory-planner",
+        "FACTORY_MODEL_ALLOWED_ORIGINS": '["http://litellm:4000","http://host.docker.internal:11434"]',
+        "FACTORY_CODER_AUTO_IMPORT": "False",
+        "FACTORY_CODER_FACTORY_URL": "",
+        "FACTORY_CODER_IMPORT_TIMEOUT": "240",
         "FACTORY_MODEL_BASE_URL": "http://litellm:4000/v1",
         "LITELLM_MASTER_KEY": "sk-" + secrets.token_hex(24),
         "OLLAMA_MODEL": "REPLACE_WITH_AN_INSTALLED_MODEL",
@@ -41,13 +45,17 @@ def main():
         additions = {}
         if "FACTORY_CREDENTIAL_ENCRYPTION_KEY" not in existing:
             additions["FACTORY_CREDENTIAL_ENCRYPTION_KEY"] = secrets.token_hex(48)
+        defaults = _new_values()
+        for key in ("FACTORY_MODEL_ALLOWED_ORIGINS", "FACTORY_CODER_AUTO_IMPORT", "FACTORY_CODER_FACTORY_URL", "FACTORY_CODER_IMPORT_TIMEOUT"):
+            if key not in existing:
+                additions[key] = defaults[key]
         if additions:
             with target.open("a", encoding="utf-8") as handle:
                 handle.write("\n# Added by a newer AI R&D platform release; existing values were preserved.\n")
                 for key, value in additions.items():
                     handle.write(f"{key}={value}\n")
             target.chmod(0o600)
-            print(".env kept unchanged; appended newly-required encrypted-provider credential key.")
+            print(".env existing values preserved; appended missing workbench settings.")
         else:
             print(".env already exists; kept unchanged.")
         return

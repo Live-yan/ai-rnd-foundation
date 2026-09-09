@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     model_base_url: str = "http://localhost:4000/v1"
     model_api_key: str = ""
     model_name: str = "factory-planner"
+    # Custom endpoints require an administrator-approved origin; paths remain configurable in the UI.
+    model_allowed_origins: list[str] = []
     model_timeout: int = 90
     model_max_tokens: int = 6000
     serena_url: str = ""
@@ -30,6 +32,9 @@ class Settings(BaseSettings):
     coder_token: str = ""
     coder_template_id: str = ""
     coder_owner_id: str = ""
+    coder_auto_import: bool = False
+    coder_factory_url: str = ""
+    coder_import_timeout: int = 240
     public_url: str = "http://localhost:8000"
     verifier_image: str = "ai-rnd-verifier:0.1.0"
     docker_host_data_dir: str = ""

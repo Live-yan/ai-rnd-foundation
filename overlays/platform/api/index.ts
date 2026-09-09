@@ -40,6 +40,7 @@ export interface ProviderProfile {
   enabled: boolean;
   is_default: boolean;
   has_api_key: boolean;
+  api_version?: string;
   temperature: number;
   max_tokens: number;
   created_at: string;
@@ -50,6 +51,7 @@ export interface ProviderInput {
   provider: string;
   base_url: string;
   api_key?: string;
+  api_version?: string;
   model: string;
   enabled: boolean;
   is_default: boolean;
@@ -80,6 +82,7 @@ export interface FactoryRun {
   spec: Record<string, any> | null;
   spec_digest: string | null;
   decision: Record<string, any> | null;
+  clarification?: Clarification | null;
   artifact_sha256: string | null;
   checks: Record<string, any> | null;
   stage_details: Record<string, any> | null;
@@ -117,7 +120,7 @@ export const FactoryAPI = {
   },
   async clarify(id: string, providerId?: string | null) {
     return data<FactoryProject>(await request({
-      url: `${API_PATH}/projects/${id}/clarify`, method: "post", data: { provider_id: providerId || null },
+      url: `${API_PATH}/projects/${id}/clarify`, method: "post", timeout: 210000, data: { provider_id: providerId || null },
     }));
   },
   async listProviders() {
@@ -160,6 +163,10 @@ export const FactoryAPI = {
   },
   async analysisFiles(id: string) {
     return data<string[]>(await request({ url: `${API_PATH}/runs/${id}/analysis`, method: "get" }));
+  },
+  async analysisFile(id: string, path: string) {
+    const response = await request({ url: `${API_PATH}/runs/${id}/analysis/file`, method: "get", params: { path }, responseType: "blob" });
+    return response.data as Blob;
   },
   async download(id: string) {
     const response = await request({ url: `${API_PATH}/runs/${id}/download`, method: "get", responseType: "blob" });

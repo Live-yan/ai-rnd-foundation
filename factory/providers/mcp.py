@@ -9,8 +9,8 @@ READ_TOOLS = {"get_symbols_overview", "find_symbol", "search_for_pattern", "list
 TEMPLATE_PATHS = [
     "backend/app/__init__.py",
     "backend/app/modules/ai/chat/controller.py",
-    "frontend/web/src/api/module_ai/chat.ts",
-    "frontend/web/src/router/MenuProcessor.ts",
+    "backend/app/modules/system/user/model.py",
+    "backend/app/modules/system/role/service.py",
 ]
 
 
@@ -41,6 +41,8 @@ class SerenaClient:
                         if result.isError:
                             raise RuntimeError(f"Serena symbol lookup failed for the pinned template path: {relative_path}")
                         text = "\n".join(getattr(part, "text", "") for part in result.content).strip()
+                        if not text or text in {"[]", "{}"}:
+                            raise RuntimeError(f"Serena returned no symbols for {relative_path}")
                         chunks.append(f"# {relative_path}\n{text}")
         value = "\n\n".join(chunks)
         if not value.strip():

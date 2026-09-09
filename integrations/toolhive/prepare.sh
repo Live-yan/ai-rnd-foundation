@@ -19,5 +19,5 @@ EOF
 docker build --build-arg SERENA_REF="$REF" -f integrations/toolhive/Dockerfile.serena -t ai-rnd-serena:locked .
 # Initialization may install language servers. Network is permitted only in this trusted preparation phase.
 docker run --rm -v "$PWD/runtime/serena-template:/template" \
-  -v "$PWD/runtime/serena-home:/root/.serena" ai-rnd-serena:locked project create --index
+  -v "$PWD/runtime/serena-home:/root/.serena" ai-rnd-serena:locked project create --language python --index
 printf '\nPrepared a dedicated template copy. Read README.md before exposing the MCP endpoint.\n'

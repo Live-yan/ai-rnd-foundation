@@ -49,3 +49,34 @@ jobs:
         run: python3 scripts/verify_frontend_dist.py frontend-dist /api/v1/web/
 
   # External-service E2E requires administrator-provided endpoints and credentials.
+
+  core-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare disposable credentials
+        run: python3 scripts/init_env.py
+      - name: Build actual host and its frontend dependency cache
+        run: |
+          docker build --target frontend -t ai-rnd-frontend-smoke .
+          docker build -t ai-rnd-foundation:0.1.0 .
+          docker build -f Dockerfile.acceptance -t ai-rnd-acceptance:ci .
+      - name: Start isolated PostgreSQL, Redis and Temporal worker
+        run: docker compose -f compose.yaml -f compose.ci.yaml up -d redis worker
+      - name: Exercise clarification, approval, delivery and genuine product authentication
+        run: timeout 900 docker compose -f compose.yaml -f compose.ci.yaml run --use-aliases --rm acceptance
+      - name: Collect worker diagnostics on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=150 worker migrate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-stack-acceptance
+          path: data/ci-reports/
+          retention-days: 7
+      - name: Remove this job's disposable stack
+        if: always()
+        run: docker compose -f compose.yaml -f compose.ci.yaml down --volumes --remove-orphans

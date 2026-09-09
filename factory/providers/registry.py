@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import uuid4
 from urllib.parse import urlparse
 
@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from ..config import Settings
 from ..database import Database, ProviderProfile
 from ..schemas import ProviderInput, ProviderUpdate
+from .endpoint_policy import validate_model_origin
 
 
 @dataclass(frozen=True)
@@ -23,10 +24,11 @@ class ProviderRuntime:
     provider: str
     base_url: str
     model: str
-    api_key: str
+    api_key: str = field(repr=False)
     temperature: float
     max_tokens: int
     source: str = "database"
+    api_version: str = ""
 
 
 def _fernet(settings: Settings) -> Fernet:
@@ -60,8 +62,8 @@ def validate_endpoint(provider: str, base_url: str) -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise HTTPException(422, "Provider Base URL must be an absolute http(s) URL")
-    if parsed.username or parsed.password or parsed.fragment:
-        raise HTTPException(422, "Provider Base URL must not contain credentials or a URL fragment")
+    if parsed.username or parsed.password or parsed.fragment or parsed.query:
+        raise HTTPException(422, "Provider Base URL must not contain credentials, a query string, or a URL fragment")
     return value.rstrip("/")
 
 
@@ -78,6 +80,7 @@ def public_provider(row: ProviderProfile) -> dict:
         "has_api_key": bool(row.api_key_ciphertext),
         "temperature": float(config.get("temperature", 0.1)),
         "max_tokens": int(config.get("max_tokens", 6000)),
+        "api_version": str(config.get("api_version", "")),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -99,6 +102,7 @@ class ProviderService:
 
     def create(self, owner: str, value: ProviderInput) -> dict:
         base_url = validate_endpoint(value.provider, value.base_url)
+        validate_model_origin(value.provider, base_url, self.settings)
         if value.api_key:
             encrypted = encrypt_secret(value.api_key, self.settings)
         else:
@@ -110,8 +114,8 @@ class ProviderService:
                 row = ProviderProfile(
                     id=str(uuid4()), owner_id=owner, name=value.name, provider=value.provider,
                     base_url=base_url, model=value.model.strip(), api_key_ciphertext=encrypted,
-                    enabled=value.enabled, is_default=value.is_default,
-                    config={"temperature": value.temperature, "max_tokens": value.max_tokens},
+                    enabled=value.enabled, is_default=value.is_default and value.enabled,
+                    config={"temperature": value.temperature, "max_tokens": value.max_tokens, "api_version": value.api_version},
                 )
                 session.add(row)
                 session.flush()
@@ -136,12 +140,13 @@ class ProviderService:
                 api_key = values.pop("api_key")
                 row.api_key_ciphertext = encrypt_secret(api_key or "", self.settings)
             config = dict(row.config or {})
-            for key in ("temperature", "max_tokens"):
+            for key in ("temperature", "max_tokens", "api_version"):
                 if key in values:
                     config[key] = values.pop(key)
             for key, item in values.items():
                 setattr(row, key, item)
             row.base_url = validate_endpoint(row.provider, row.base_url)
+            validate_model_origin(row.provider, row.base_url, self.settings)
             if not row.enabled:
                 row.is_default = False
             row.config = config
@@ -181,12 +186,16 @@ class ProviderService:
             row = session.scalar(stmt.limit(1))
             if row:
                 config = row.config or {}
+                validate_model_origin(row.provider, row.base_url, self.settings)
                 return ProviderRuntime(
                     id=row.id, name=row.name, provider=row.provider, base_url=row.base_url, model=row.model,
                     api_key=decrypt_secret(row.api_key_ciphertext, self.settings),
                     temperature=float(config.get("temperature", 0.1)),
                     max_tokens=int(config.get("max_tokens", self.settings.model_max_tokens)),
+                    api_version=str(config.get("api_version", "")),
                 )
+        if provider_id and provider_id != "system-litellm":
+            raise HTTPException(404, "Selected provider is unavailable, disabled, or belongs to another user")
         if self.settings.model_api_key:
             return ProviderRuntime(
                 id="system-litellm", name="系统 LiteLLM", provider="litellm_proxy",

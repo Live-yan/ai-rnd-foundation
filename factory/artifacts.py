@@ -9,6 +9,7 @@ import subprocess
 from datetime import date
 from pathlib import Path
 from .schemas import ProjectSpec
+from .diagram_assets import embed_svg_images
 
 
 def put(root: Path, name: str, text: str):
@@ -109,11 +110,13 @@ def render(filename):
         user >> web
         web >> PostgreSQL("PostgreSQL")
         web >> Redis("Sessions")
+    embed_svg_images(Path(str(filename) + ".svg"))
 
 if __name__ == "__main__":
     from pathlib import Path
     render(Path(__file__).with_name("deployment"))
 '''
+    source = Path(__file__).with_name('diagram_assets.py').read_text() + '\n' + source
     put(root, 'architecture/deployment.py', source)
     try:
         from diagrams import Diagram
@@ -126,7 +129,8 @@ if __name__ == "__main__":
             user >> web
             web >> PostgreSQL('PostgreSQL')
             web >> Redis('Sessions')
-        result['diagrams'] = 'rendered'
+        embed_svg_images(output / 'deployment.svg')
+        result['diagrams'] = 'rendered_portable_svg'
     except ImportError:
         if diagrams_required:
             raise RuntimeError('The diagrams dependency is required; run uv sync')
@@ -134,7 +138,7 @@ if __name__ == "__main__":
     return result
 
 
-def build_openspec(root: Path, spec: ProjectSpec) -> None:
+def build_openspec(root: Path, spec: ProjectSpec, *, generated: bool = True, clarification: dict | None = None) -> None:
     put(root, 'openspec/config.yaml', 'schema: spec-driven\ncontext: |\n  FastapiAdmin, uv, PostgreSQL, Vue3.\n  Generate bounded CRUD, never claim unsupported business rules are complete.\n')
     base = 'openspec/changes/create-product'
     put(root, base + '/.openspec.yaml', f'schema: spec-driven\ncreated: {date.today().isoformat()}\n')
@@ -171,3 +175,12 @@ def build_openspec(root: Path, spec: ProjectSpec) -> None:
         {'id': 'package', 'depends_on': ['validate'], 'executor': 'trusted_factory'}],
         'note': 'Explicit platform DAG; OpenSpec Markdown checkboxes are not parsed as executable commands.'}
     put(root, 'docs/tasks.dag.json', json.dumps(tasks, indent=2, ensure_ascii=False))
+
+    tasks_path = root / base / "tasks.md"
+    if not generated:
+        tasks_path.write_text(tasks_path.read_text(encoding="utf-8").replace("- [x]", "- [ ]"), encoding="utf-8")
+    if clarification:
+        brief = "# 已澄清需求与验收基线\n\n" + str(clarification.get("understanding", "")) + "\n"
+        for key, title in [("acceptance_criteria", "待执行的验收标准"), ("assumptions", "假设"), ("risks", "风险")]:
+            brief += "\n## " + title + "\n" + "\n".join("- " + str(x) for x in clarification.get(key, [])) + "\n"
+        put(root, base + "/requirements.md", brief)

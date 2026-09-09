@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import FactoryAPI, { type ProviderInput, type ProviderProfile } from "@/api/module_factory";
@@ -23,7 +23,7 @@ const kinds = [
   ["xai", "xAI", "Grok models"],
   ["litellm_proxy", "LiteLLM Proxy", "Your own LiteLLM gateway / model aliases"],
   ["custom_openai", "Custom OpenAI-compatible", "Any verified OpenAI-compatible endpoint"],
-];
+] as const;
 const presets: Record<string, string> = {
   deepseek: "https://api.deepseek.com/v1",
   groq: "https://api.groq.com/openai/v1",
@@ -32,7 +32,7 @@ const presets: Record<string, string> = {
 };
 const form = reactive<ProviderInput>({
   name: "", provider: "openai", base_url: "", api_key: "", model: "",
-  enabled: true, is_default: false, temperature: 0.1, max_tokens: 6000,
+  enabled: true, is_default: false, temperature: 0.1, max_tokens: 6000, api_version: "",
 });
 const enabledCount = computed(() => items.value.filter((item) => item.enabled).length);
 const defaultItem = computed(() => items.value.find((item) => item.is_default));
@@ -44,16 +44,16 @@ async function refresh() {
 }
 function openCreate() {
   editing.value = null;
-  Object.assign(form, { name: "", provider: "openai", base_url: "", api_key: "", model: "", enabled: true, is_default: items.value.length === 0, temperature: 0.1, max_tokens: 6000 });
+  Object.assign(form, { name: "", provider: "openai", base_url: "", api_key: "", model: "", enabled: true, is_default: items.value.length === 0, temperature: 0.1, max_tokens: 6000, api_version: "" });
   drawer.value = true;
 }
 function openEdit(item: ProviderProfile) {
   editing.value = item;
-  Object.assign(form, { name: item.name, provider: item.provider, base_url: item.base_url, api_key: "", model: item.model, enabled: item.enabled, is_default: item.is_default, temperature: item.temperature, max_tokens: item.max_tokens });
+  Object.assign(form, { name: item.name, provider: item.provider, base_url: item.base_url, api_key: "", model: item.model, enabled: item.enabled, is_default: item.is_default, temperature: item.temperature, max_tokens: item.max_tokens, api_version: item.api_version || "" });
   drawer.value = true;
 }
 function providerChanged(value: string) {
-  if (!editing.value && presets[value]) form.base_url = presets[value];
+  if (!editing.value) form.base_url = presets[value] || "";
 }
 async function save() {
   if (!form.name.trim() || !form.model.trim()) return;
@@ -76,6 +76,7 @@ async function test(item: ProviderProfile) {
   testing.value = item.id;
   try {
     const result = await FactoryAPI.testProvider(item.id);
+    if (!result.ok) throw new Error("模型测试没有返回成功确认");
     ElMessage.success(result.message || "模型已返回响应");
   } catch (error: any) {
     ElMessage.error(error?.response?.data?.msg || error?.response?.data?.detail || error?.message || String(error));
@@ -85,10 +86,15 @@ async function setDefault(item: ProviderProfile) {
   await FactoryAPI.defaultProvider(item.id); await refresh();
 }
 async function remove(item: ProviderProfile) {
-  await ElMessageBox.confirm(`删除模型配置“${item.name}”？历史任务只保留 provider_id，不会回显密钥。`, "删除模型供应商", { type: "warning" });
-  await FactoryAPI.deleteProvider(item.id); await refresh();
+  try {
+    await ElMessageBox.confirm(`删除模型配置“${item.name}”？尚未完成规划的任务可能因此失败。`, "删除模型供应商", { type: "warning" });
+    await FactoryAPI.deleteProvider(item.id); await refresh();
+  } catch (error) {
+    if (error !== "cancel" && error !== "close") ElMessage.error("删除未完成，请检查权限或网络状态");
+  }
 }
 
+watch(drawer, (open) => { if (!open) form.api_key = ""; });
 onMounted(refresh);
 </script>
 
@@ -123,6 +129,7 @@ onMounted(refresh);
       <el-form label-position="top">
         <el-form-item label="显示名称"><el-input v-model="form.name" placeholder="例如：生产 OpenAI / 本机 Ollama" /></el-form-item>
         <el-form-item label="供应商"><el-select v-model="form.provider" style="width:100%" @change="providerChanged"><el-option v-for="kind in kinds" :key="kind[0]" :value="kind[0]" :label="kind[1]"><span>{{ kind[1] }}</span><small class="option-note">{{ kind[2] }}</small></el-option></el-select></el-form-item>
+        <el-form-item v-if="form.provider === 'azure_openai'" label="Azure API Version"><el-input v-model="form.api_version" placeholder="填写 Azure 部署支持的 api-version" /></el-form-item>
         <el-form-item label="模型 ID"><el-input v-model="form.model" placeholder="填写供应商当前有效的模型 ID 或 LiteLLM alias" /></el-form-item>
         <el-form-item label="Base URL"><el-input v-model="form.base_url" placeholder="留空使用供应商默认；自定义/代理请填写完整地址" /></el-form-item>
         <el-form-item :label="editing && editing.has_api_key ? 'API Key（留空保留原值）' : 'API Key'"><el-input v-model="form.api_key" type="password" show-password autocomplete="new-password" /></el-form-item>
