@@ -12,6 +12,6 @@
   "frontend_public_base": "/api/v1/web/",
   "capabilities": ["typed-crud", "parent-child-relations", "per-user-data", "c4-dsl", "er-svg", "openspec", "download-zip"],
   "not_supported": ["arbitrary-business-code", "payments", "approval-engine", "device-collection", "many-to-many", "cross-entity-transactions", "automatic-production-deployment"],
-  "required_paths": ["backend/app/__init__.py", "backend/pyproject.toml", "frontend/web/src/router/index.ts", "LICENSE"],
-  "route_file": "frontend/web/src/router/index.ts"
+  "required_paths": ["backend/app/__init__.py", "backend/pyproject.toml", "frontend/web/src/router/index.ts", "frontend/web/src/router/MenuProcessor.ts", "LICENSE"],
+  "route_file": "frontend/web/src/router/MenuProcessor.ts"
 }
