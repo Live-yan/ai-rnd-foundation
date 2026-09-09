@@ -3,7 +3,9 @@ WORKDIR /web
 RUN npm install --global pnpm@9.15.3
 COPY frontend/web/ ./
 RUN cp .env.production.example .env.production && \
-    printf '\nVITE_BASE_URL=/api/v1/web/\nVITE_APP_BASE_API=/api/v1\n' >> .env.production
+    printf '\nVITE_ACCESS_MODE=mixed\nVITE_BASE_URL=/api/v1/web/\nVITE_APP_BASE_API=/api/v1\n' >> .env.production
+RUN grep -q 'AI-RND-FRONTEND-ROUTE:business:v2' src/router/MenuProcessor.ts && \
+    grep -q '^VITE_ACCESS_MODE=mixed$' .env.production
 RUN if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; else pnpm install; fi
 RUN pnpm exec vite build --mode production && \
     test -s src/types/auto-imports.d.ts && test -s src/types/components.d.ts && \
