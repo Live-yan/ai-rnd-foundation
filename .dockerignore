@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+data
+runtime
+.vendor
+.venv
+**/__pycache__
+**/node_modules
+reports
+*.zip
+*.pdf

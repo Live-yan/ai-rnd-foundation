@@ -1,0 +1,8 @@
+digraph ER {
+  graph [rankdir=LR, charset="UTF-8"];
+  node [shape=plain, fontname="sans-serif"];
+  edge [fontname="sans-serif"];
+  device [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0"><TR><TD><B>biz_device</B></TD></TR><TR><TD ALIGN="LEFT">id : integer PK</TD></TR><TR><TD ALIGN="LEFT">owner_id : string (private scope)</TD></TR><TR><TD ALIGN="LEFT">created_at : timestamp</TD></TR><TR><TD ALIGN="LEFT">name : string NOT NULL</TD></TR><TR><TD ALIGN="LEFT">code : string NOT NULL</TD></TR><TR><TD ALIGN="LEFT">enabled : boolean NOT NULL</TD></TR></TABLE>>];
+  maintenance [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0"><TR><TD><B>biz_maintenance</B></TD></TR><TR><TD ALIGN="LEFT">id : integer PK</TD></TR><TR><TD ALIGN="LEFT">owner_id : string (private scope)</TD></TR><TR><TD ALIGN="LEFT">created_at : timestamp</TD></TR><TR><TD ALIGN="LEFT">device_id : reference NOT NULL</TD></TR><TR><TD ALIGN="LEFT">performed_on : date NOT NULL</TD></TR><TR><TD ALIGN="LEFT">notes : text NOT NULL</TD></TR></TABLE>>];
+  device -> maintenance [label="device_id", arrowhead=crow, arrowtail=tee, dir=both];
+}

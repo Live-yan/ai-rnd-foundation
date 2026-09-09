@@ -1,0 +1,30 @@
+{
+  "python_ast": {
+    "status": "passed",
+    "files": 49
+  },
+  "yaml_parse": {
+    "status": "passed",
+    "files": [
+      "compose.yaml",
+      "compose.sandbox.yaml",
+      "overlays/product/compose.yaml",
+      ".github/workflows/tests.yml"
+    ],
+    "docker_compose_config": "not_run"
+  },
+  "shell_syntax": {
+    "status": "passed",
+    "files": 7
+  },
+  "typescript_script_syntax": {
+    "status": "passed",
+    "files": 2,
+    "vue_template_compile": "not_run",
+    "vue_tsc": "not_run"
+  },
+  "structurizr_parser": "not_run",
+  "docker_build": "not_run",
+  "actual_postgresql": "not_run",
+  "live_external_integrations": "not_run"
+}

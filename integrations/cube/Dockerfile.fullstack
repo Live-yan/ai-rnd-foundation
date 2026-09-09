@@ -1,0 +1,23 @@
+# Build ai-rnd-acceptance:ci first from this exact revision. The final image keeps
+# Cube's envd/agent and entrypoint; it is NOT the plain Docker source verifier.
+FROM ai-rnd-acceptance:ci AS cache
+FROM ghcr.io/tencentcloud/cubesandbox-base:2026.16
+USER root
+COPY --from=cache /usr/local/bin/uv /usr/local/bin/uv
+COPY --from=cache /usr/local/bin/node /usr/local/bin/node
+COPY --from=cache /usr/local/lib/node_modules/pnpm/ /usr/local/lib/node_modules/pnpm/
+COPY --from=cache /opt/rnd-node/ /opt/rnd-node/
+COPY --from=cache /opt/rnd-verifier/ /opt/rnd-verifier/
+COPY --from=cache /app/runtime/combined/pyproject.toml /app/runtime/combined/uv.lock /opt/rnd-runtime/
+ENV UV_PYTHON_INSTALL_DIR=/opt/rnd-python UV_PYTHON_PREFERENCE=only-managed
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        postgresql redis-server ca-certificates libstdc++6 git graphviz fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && uv python install 3.12 \
+    && uv sync --directory /opt/rnd-runtime --frozen --no-dev --python 3.12 \
+    && ln -s /usr/local/lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+    && useradd --create-home --uid 10001 factory \
+    && chown -R factory:factory /opt/rnd-node \
+    && chmod -R a+rX /opt/rnd-runtime /opt/rnd-python /opt/rnd-verifier
+# Keep the official Cube base image's CMD/ENTRYPOINT. The SDK runs the fixed
+# acceptance command with user="factory"; application work never runs as root.

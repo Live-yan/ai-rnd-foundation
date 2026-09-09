@@ -1,0 +1,16 @@
+# CI-only image. Build the normal runtime and frontend images first.
+FROM ai-rnd-foundation:0.1.0
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql redis-server \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=ai-rnd-frontend-smoke /web/node_modules/ /opt/rnd-node/node_modules/
+COPY --from=ai-rnd-frontend-smoke /web/pnpm-lock.yaml /opt/rnd-node/pnpm-lock.yaml
+COPY --from=ai-rnd-frontend-smoke /usr/local/lib/node_modules/pnpm/ /usr/local/lib/node_modules/pnpm/
+COPY integrations/coder/import_source.py /app/integrations/coder/import_source.py
+COPY integrations/coder/import_source.py /opt/rnd-verifier/import_source.py
+COPY scripts/full_stack.py scripts/verify_delivery_stack.py /opt/rnd-verifier/
+RUN ln -s /usr/local/lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
+    && ln -s /app/runtime/combined /opt/rnd-runtime \
+    && chown -R 10001:10001 /opt/rnd-node /app/integrations
+USER factory
+CMD ["python", "/app/scripts/ci_core_e2e.py"]

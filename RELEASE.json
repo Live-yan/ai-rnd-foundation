@@ -1,0 +1,25 @@
+{
+  "name": "AI R&D Platform Foundation",
+  "version": "0.1.0",
+  "date": "2026-09-08",
+  "delivery_type": "online-assembly source foundation, not fully offline or live-end-to-end validated",
+  "upstream": {
+    "repository": "https://github.com/fastapiadmin/FastapiAdmin",
+    "commit": "f7f5fb61a5c918016640f6b07e053c807381b7cc",
+    "included_in_initial_archive": false,
+    "downloaded_by": "scripts/bootstrap.py during first Docker build"
+  },
+  "local_tests": {
+    "passed": 64,
+    "skipped": 1,
+    "skipped_reason": "LangGraph not installed"
+  },
+  "live_full_stack": "not_run",
+  "live_model": "not_run",
+  "live_external_tools": "not_run",
+  "handbook_pdf_pages": 38,
+  "programming_ai_prompts": 12,
+  "first_run": "Read docs/START_HERE.md; Docker Desktop/WSL2 and internet access required",
+  "implemented_generation_scope": "typed CRUD and acyclic parent-child relations; one actual template adapter",
+  "next_quality_gate": "real pinned-upstream build, real PG/Redis/Temporal/LangGraph flow, fresh downloaded-product deployment"
+}

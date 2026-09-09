@@ -1,0 +1,92 @@
+name: Foundation contracts
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.10'
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y graphviz
+      - run: uv sync --extra dev
+      - run: uv run pytest --junitxml=reports/junit-ci.xml
+      - name: Record exact source under test (tracked files only, no credentials)
+        if: always()
+        run: |
+          mkdir -p reports
+          git rev-parse HEAD > reports/source-commit.txt
+          git archive --format=tar --output=reports/source-under-test.tar HEAD
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: contract-results
+          path: reports/
+          retention-days: 7
+
+  frontend-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the real FastapiAdmin frontend stage
+        run: docker build --target frontend -t ai-rnd-frontend-smoke .
+      - name: Extract built frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker create ai-rnd-frontend-smoke)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/web/dist" ./frontend-dist
+          docker rm "$cid" >/dev/null
+          trap - EXIT
+      - name: Verify root-path-aware asset URLs
+        run: python3 scripts/verify_frontend_dist.py frontend-dist /api/v1/web/
+
+  # External-service E2E requires administrator-provided endpoints and credentials.
+
+  core-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare disposable credentials
+        run: python3 scripts/init_env.py
+      - name: Build actual host and its frontend dependency cache
+        run: |
+          docker build --target frontend -t ai-rnd-frontend-smoke .
+          docker build -t ai-rnd-foundation:0.1.0 .
+          docker build -f Dockerfile.acceptance -t ai-rnd-acceptance:ci .
+      - name: Start isolated PostgreSQL, Redis and Temporal worker
+        run: docker compose -f compose.yaml -f compose.ci.yaml up -d redis worker
+      - name: Exercise clarification, approval, delivery and genuine product authentication
+        run: timeout 900 docker compose -f compose.yaml -f compose.ci.yaml run --use-aliases --rm acceptance
+      - name: Collect worker diagnostics on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=150 worker migrate
+      - name: Export only acceptance reports from the private data directory
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p core-stack-reports
+          if sudo test -d data/ci-reports; then
+            sudo cp -R data/ci-reports/. core-stack-reports/
+            sudo chown -R "$(id -u):$(id -g)" core-stack-reports
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-stack-acceptance
+          path: core-stack-reports/
+          retention-days: 7
+      - name: Remove this job's disposable stack
+        if: always()
+        run: docker compose -f compose.yaml -f compose.ci.yaml down --volumes --remove-orphans

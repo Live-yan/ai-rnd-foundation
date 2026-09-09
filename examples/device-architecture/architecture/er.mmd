@@ -1,0 +1,18 @@
+erDiagram
+  biz_device {
+    int id PK
+    string owner_id
+    datetime created_at
+    string name
+    string code
+    boolean enabled
+  }
+  biz_maintenance {
+    int id PK
+    string owner_id
+    datetime created_at
+    int device_id FK
+    date performed_on
+    string notes
+  }
+  biz_device ||--o{ biz_maintenance : device_id

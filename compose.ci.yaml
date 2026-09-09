@@ -1,0 +1,35 @@
+# Disposable CI only: do not combine this file with a real deployment.
+services:
+  worker:
+    environment:
+      FACTORY_MODEL_ALLOWED_ORIGINS: '["http://acceptance:9010"]'
+  acceptance:
+    image: ai-rnd-acceptance:ci
+    env_file: .env
+    environment:
+      FACTORY_ACCEPTANCE_DISPOSABLE: "1"
+      FACTORY_DATABASE_URL: ${FACTORY_DATABASE_URL}
+      FACTORY_DATA_DIR: /app/data
+      FACTORY_UPSTREAM_DIR: /app/.vendor/FastapiAdmin
+      FACTORY_TEMPORAL_ADDRESS: temporal:7233
+      FACTORY_MODEL_ALLOWED_ORIGINS: '["http://acceptance:9010"]'
+      ENVIRONMENT: dev
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: factory
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_NAME: factory
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      CAPTCHA_ENABLE: "False"
+      IP_LOCATION_ENABLE: "False"
+      SCHEDULER_ALLOW_CODE_EXEC: "False"
+      DEMO_ENABLE: "False"
+      DEBUG: "False"
+    volumes: ["./data:/app/data"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+      temporal: {condition: service_healthy}

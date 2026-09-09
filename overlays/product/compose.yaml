@@ -1,0 +1,55 @@
+# Local development delivery only. The initial image build needs Internet access.
+services:
+  postgres:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_USER: product
+      POSTGRES_DB: product
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?Run python scripts/init_product.py first}
+    ports: ["127.0.0.1:55433:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U product -d product"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  redis:
+    image: redis:7.4-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Generate .env first}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --appendonly yes"]
+    ports: ["127.0.0.1:56380:6379"]
+    volumes: ["redisdata:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.delivery
+    env_file: .env
+    environment:
+      ENVIRONMENT: dev
+      DATABASE_TYPE: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: product
+      DATABASE_NAME: product
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8000
+      DEBUG: "False"
+      DEMO_ENABLE: "False"
+      SCHEDULER_ALLOW_CODE_EXEC: "False"
+      IP_LOCATION_ENABLE: "False"
+      OPENAI_API_KEY: ""
+    ports: ["127.0.0.1:8010:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+volumes:
+  pgdata:
+  redisdata:

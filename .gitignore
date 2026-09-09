@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+data/
+runtime/
+.vendor/
+.venv/
+**/__pycache__/
+**/node_modules/
+.pytest_cache/
+.ruff_cache/
+*.zip
+AI_RND_Platform_Handbook.pdf
+AI_RND_Platform_Handbook.md
