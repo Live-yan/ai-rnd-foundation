@@ -27,6 +27,7 @@ def fake_upstream(tmp_path):
               'backend/app/__init__.py':'def create_app():\n    raise RuntimeError("test fixture only")\n',
               'backend/pyproject.toml':'[project]\nname="test-fixture"\nversion="0.0.0"\nrequires-python=">=3.12"\ndependencies=[]\n',
               'frontend/web/src/router/index.ts':'export const router = {addRoute: (value: unknown) => value};\n',
+              'frontend/web/src/router/MenuProcessor.ts':'import type { AppRouteRecord } from "@/types/router";\nexport const builtinFrontendRoutes: AppRouteRecord[] = [];\n',
               'frontend/web/package.json':'{"name":"test-fixture","version":"0.0.0"}\n'}
     for name,text in values.items():
         path = root / name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text(text)
