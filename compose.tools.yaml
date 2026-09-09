@@ -1,19 +1,20 @@
-# Optional administrator-managed tool services. This does not install Cube's KVM cluster.
+# Optional tool UI; no KVM and no Docker socket granted by default.
+# Use: docker compose -f compose.yaml -f compose.tools.yaml --profile tools up -d coder
 services:
-  structurizr:
-    image: structurizr/structurizr:2026.06.28-noble
-    command: ["local"]
-    ports: ["127.0.0.1:8081:8080"]
-    volumes: ["./architecture:/usr/local/structurizr"]
-    profiles: ["tools"]
   coder:
+    # Pin the verified digest for your deployment; latest is for local development.
     image: ghcr.io/coder/coder:latest
     command: ["server"]
     environment:
-      CODER_ACCESS_URL: ${CODER_ACCESS_URL:-http://localhost:7080}
+      CODER_PG_CONNECTION_URL: postgresql://factory:${POSTGRES_PASSWORD}@postgres:5432/coder?sslmode=disable
+      CODER_ACCESS_URL: ${CODER_ACCESS_URL:-http://host.docker.internal:7080}
       CODER_HTTP_ADDRESS: 0.0.0.0:7080
+    extra_hosts: ["host.docker.internal:host-gateway"]
     volumes: ["coder_data:/home/coder"]
     ports: ["127.0.0.1:7080:7080"]
+    depends_on:
+      tools-db-init: {condition: service_completed_successfully}
     profiles: ["tools"]
+    restart: unless-stopped
 volumes:
   coder_data:

@@ -5,9 +5,12 @@ from .options import option_kwargs
 
 def export_config(profiles: list[dict]) -> dict:
     import yaml
-    models, variables = [], []
+    models, variables, skipped = [], [], []
     for profile in profiles:
         if not profile["enabled"]:
+            continue
+        if profile["provider"] == "chatgpt":
+            skipped.append({"id": profile["id"], "reason": "owner_scoped_subscription_not_shareable"})
             continue
         prefix = PROVIDER_PREFIX[profile["provider"]]
         model = profile["model"]
@@ -25,11 +28,10 @@ def export_config(profiles: list[dict]) -> dict:
             name = "RND_" + profile["id"].replace("-", "_").upper() + "_" + key.upper()
             variables.append(name)
             params[key] = "os.environ/" + name
-        if profile["provider"] == "chatgpt":
-            params.pop("max_tokens", None); params.pop("temperature", None)
         models.append({"model_name": profile["name"], "litellm_params": params})
     value = {"model_list": models, "litellm_settings": {"drop_params": True},
              "general_settings": {"master_key": "os.environ/LITELLM_MASTER_KEY"}}
     return {"yaml": yaml.safe_dump(value, allow_unicode=True, sort_keys=False),
             "environment_variables": ["LITELLM_MASTER_KEY", *variables],
-            "note": "平台立即使用保存的 LiteLLM SDK 配置。此文件是 Proxy 部署配置，不自动覆盖独立网关；ChatGPT 需在独立网关重新授权，账号令牌不会导出。"}
+            "skipped": skipped,
+            "note": "此文件仅导出 API/云凭据模型到 Proxy，密钥以环境变量引用。ChatGPT 订阅账号已排除，不能把个人授权变成共享网关账号。不会自动覆盖或重启现有网关。"}

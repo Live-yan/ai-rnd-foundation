@@ -123,7 +123,7 @@ class ProjectSpec(StrictModel):
 
 
 def canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 class ProjectInput(StrictModel):
@@ -168,8 +168,16 @@ class ProviderCredentials(BaseModel):
                 raise ValueError("Only a service-account JSON document is accepted, never a file path")
             if data.get("token_uri") not in {None, "https://oauth2.googleapis.com/token"}:
                 raise ValueError("Custom credential endpoints are not accepted")
-            if not all(data.get(key) for key in ("client_email", "private_key", "project_id")):
+            allowed = {"type", "project_id", "private_key_id", "private_key", "client_email", "client_id",
+                       "auth_uri", "token_uri", "auth_provider_x509_cert_url", "client_x509_cert_url", "universe_domain"}
+            if set(data) - allowed or data.get("universe_domain", "googleapis.com") != "googleapis.com":
+                raise ValueError("Only standard Google service-account fields are supported")
+            if not all(isinstance(data.get(key), str) and data[key] for key in ("client_email", "private_key", "project_id")):
                 raise ValueError("Incomplete service-account credentials")
+            data["token_uri"] = "https://oauth2.googleapis.com/token"
+            # Canonical necessary fields only; certificate URLs are not needed for token exchange.
+            value = json.dumps({key:data[key] for key in ("type", "project_id", "private_key_id", "private_key",
+                                "client_email", "client_id", "token_uri") if key in data})
         return value
 
 

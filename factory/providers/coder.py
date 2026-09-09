@@ -71,7 +71,7 @@ class CoderClient:
                 data = response.json()
             result = {
                 "workspace_id": data["id"], "name": data.get("name", name),
-                "url": s.coder_url.rstrip("/") + "/@" + quote(data["owner_name"], safe="") + "/" + quote(data.get("name", name), safe=""),
+                "url": (s.coder_browser_url or s.coder_url).rstrip("/") + "/@" + quote(data["owner_name"], safe="") + "/" + quote(data.get("name", name), safe=""),
                 "source_import": "manual_zip_upload", "readiness": "created_not_build_verified",
             }
             if not source:

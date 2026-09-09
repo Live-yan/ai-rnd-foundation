@@ -75,6 +75,15 @@ def validate_endpoint(provider: str, base_url: str) -> str:
     return value.rstrip("/")
 
 
+def validate_credentials(provider: str, api_key: str, values: dict) -> None:
+    active = {key for key, value in values.items() if value}
+    allowed = ({"aws_access_key_id", "aws_secret_access_key", "aws_session_token"} if provider == "bedrock"
+               else {"vertex_credentials"} if provider == "vertex_ai" else set())
+    if active - allowed or (provider in {"chatgpt", "bedrock", "vertex_ai"} and api_key):
+        raise HTTPException(422, "凭据类型与供应商不匹配；账号授权、云凭据和 API Key 不能混用")
+    ProviderCredentials.model_validate(values)
+
+
 def public_provider(row: ProviderProfile) -> dict:
     config = row.config or {}
     return {
@@ -100,7 +109,12 @@ def public_provider(row: ProviderProfile) -> dict:
 class ProviderService:
     def __init__(self, db: Database, settings: Settings):
         self.db = db
-        self.settings = settings
+        self._settings = settings
+
+    @property
+    def settings(self) -> Settings:
+        from ..tool_settings import ToolSettingsService
+        return ToolSettingsService(self.db, self._settings).effective()
 
     def list(self, owner: str) -> list[dict]:
         with self.db.session() as session:
@@ -112,10 +126,12 @@ class ProviderService:
             return [public_provider(row) for row in rows]
 
     def create(self, owner: str, value: ProviderInput) -> dict:
+        settings = self.settings
+        validate_credentials(value.provider, value.api_key, value.credentials.model_dump())
         base_url = validate_endpoint(value.provider, value.base_url)
-        validate_model_origin(value.provider, base_url, self.settings)
+        validate_model_origin(value.provider, base_url, settings)
         if value.api_key:
-            encrypted = encrypt_secret(value.api_key, self.settings)
+            encrypted = encrypt_secret(value.api_key, settings)
         else:
             encrypted = ""
         try:
@@ -128,7 +144,7 @@ class ProviderService:
                     enabled=value.enabled, is_default=value.is_default and value.enabled,
                     config={"temperature": value.temperature, "max_tokens": value.max_tokens, "api_version": value.api_version,
                             "litellm_params": value.litellm_params.model_dump(exclude_none=True),
-                            "credentials_ciphertext": encrypt_secret(value.credentials.model_dump_json(), self.settings) if any(value.credentials.model_dump().values()) else "",
+                            "credentials_ciphertext": encrypt_secret(value.credentials.model_dump_json(), settings) if any(value.credentials.model_dump().values()) else "",
                             "credential_fields": [k for k,v in value.credentials.model_dump().items() if v]},
                 )
                 session.add(row)
@@ -138,6 +154,7 @@ class ProviderService:
             raise HTTPException(409, "A provider profile with this name already exists") from exc
 
     def update(self, owner: str, provider_id: str, value: ProviderUpdate) -> dict:
+        settings = self.settings
         with self.db.session() as session:
             row = session.scalar(select(ProviderProfile).where(
                 ProviderProfile.id == provider_id, ProviderProfile.owner_id == owner
@@ -154,21 +171,23 @@ class ProviderService:
                 row.is_default = make_default
             if "api_key" in values:
                 api_key = values.pop("api_key")
-                row.api_key_ciphertext = encrypt_secret(api_key or "", self.settings)
+                row.api_key_ciphertext = encrypt_secret(api_key or "", settings)
             config = dict(row.config or {})
             if "credentials" in values:
                 new = values.pop("credentials")
-                old = json.loads(decrypt_secret(config.get("credentials_ciphertext", ""), self.settings) or "{}")
+                old = json.loads(decrypt_secret(config.get("credentials_ciphertext", ""), settings) or "{}")
                 merged = ProviderCredentials.model_validate({**old, **new}).model_dump()
-                config["credentials_ciphertext"] = encrypt_secret(json.dumps(merged), self.settings) if any(merged.values()) else ""
+                config["credentials_ciphertext"] = encrypt_secret(json.dumps(merged), settings) if any(merged.values()) else ""
                 config["credential_fields"] = [k for k, v in merged.items() if v]
+            validate_credentials(row.provider, decrypt_secret(row.api_key_ciphertext, settings),
+                                 json.loads(decrypt_secret(config.get("credentials_ciphertext", ""), settings) or "{}"))
             for key in ("temperature", "max_tokens", "api_version", "litellm_params"):
                 if key in values:
                     config[key] = values.pop(key)
             for key, item in values.items():
                 setattr(row, key, item)
             row.base_url = validate_endpoint(row.provider, row.base_url)
-            validate_model_origin(row.provider, row.base_url, self.settings)
+            validate_model_origin(row.provider, row.base_url, settings)
             if not row.enabled:
                 row.is_default = False
             row.config = config
@@ -197,6 +216,7 @@ class ProviderService:
             return public_provider(row)
 
     def runtime(self, owner: str, provider_id: str | None = None) -> ProviderRuntime:
+        settings = self.settings
         with self.db.session() as session:
             stmt = select(ProviderProfile).where(
                 ProviderProfile.owner_id == owner, ProviderProfile.enabled.is_(True)
@@ -210,24 +230,29 @@ class ProviderService:
                 config = row.config or {}
                 if row.provider == "chatgpt" and config.get("oauth_status") != "connected":
                     raise HTTPException(409, "请先在供应商页面完成 ChatGPT / Codex 登录")
-                validate_model_origin(row.provider, row.base_url, self.settings)
+                validate_endpoint(row.provider, row.base_url)
+                validate_model_origin(row.provider, row.base_url, settings)
+                api_key = decrypt_secret(row.api_key_ciphertext, settings)
+                credentials = ProviderCredentials.model_validate(json.loads(decrypt_secret(
+                    config.get("credentials_ciphertext", ""), settings) or "{}")).model_dump(exclude_defaults=True)
+                validate_credentials(row.provider, api_key, credentials)
                 return ProviderRuntime(
                     id=row.id, name=row.name, provider=row.provider, base_url=row.base_url, model=row.model,
-                    api_key=decrypt_secret(row.api_key_ciphertext, self.settings),
+                    api_key=api_key,
                     temperature=float(config.get("temperature", 0.1)),
-                    max_tokens=int(config.get("max_tokens", self.settings.model_max_tokens)),
+                    max_tokens=int(config.get("max_tokens", settings.model_max_tokens)),
                     api_version=str(config.get("api_version", "")),
                     litellm_params=LiteLLMOptions.model_validate(config.get("litellm_params", {})).model_dump(exclude_none=True),
-                    credentials=json.loads(decrypt_secret(config.get("credentials_ciphertext", ""), self.settings) or "{}"),
+                    credentials=credentials,
                     owner_id=owner,
                 )
         if provider_id and provider_id != "system-litellm":
             raise HTTPException(404, "Selected provider is unavailable, disabled, or belongs to another user")
-        if self.settings.model_api_key:
+        if settings.model_api_key:
             return ProviderRuntime(
                 id="system-litellm", name="系统 LiteLLM", provider="litellm_proxy",
-                base_url=self.settings.model_base_url, model=self.settings.model_name,
-                api_key=self.settings.model_api_key, temperature=0.1,
-                max_tokens=self.settings.model_max_tokens, source="environment",
+                base_url=settings.model_base_url, model=settings.model_name,
+                api_key=settings.model_api_key, temperature=0.1,
+                max_tokens=settings.model_max_tokens, source="environment",
             )
         raise HTTPException(422, "请先在“模型供应商”中配置并启用一个模型；严谨流程不会自动退回固定 Demo")

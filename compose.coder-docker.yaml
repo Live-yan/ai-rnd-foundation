@@ -1,0 +1,7 @@
+# TRUSTED LOCAL DEV ONLY: explicitly grants Coder's provisioner HOST CONTROL.
+# Never combine with untrusted tenants. Generated workspaces get NO socket mount.
+# In WSL/Linux: export DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+services:
+  coder:
+    group_add: ["${DOCKER_GID:?Set the actual Docker socket group ID in WSL/Linux}"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]

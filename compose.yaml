@@ -134,12 +134,37 @@ services:
       migrate: {condition: service_completed_successfully}
       temporal: {condition: service_healthy}
     restart: unless-stopped
+  # Optional local administration databases, separate from FastapiAdmin schemas.
+  # Creates only missing databases. Credentials remain those generated in .env.
+  tools-db-init:
+    profiles: ["ai", "tools"]
+    image: postgres:17-bookworm
+    environment: {PGPASSWORD: "${POSTGRES_PASSWORD}"}
+    command:
+      - sh
+      - -ceu
+      - |
+        psql -X -h postgres -U factory -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+        SELECT 'CREATE DATABASE litellm' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm') \gexec
+        SELECT 'CREATE DATABASE coder' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='coder') \gexec
+        SQL
+    depends_on:
+      postgres-auth-sync: {condition: service_completed_successfully}
+    restart: "no"
   litellm:
     profiles: ["ai"]
     # Mutable stable tag is explicitly recorded; pin a resolved digest after local verification.
     image: ghcr.io/berriai/litellm:main-stable
     command: ["--config", "/app/config.yaml", "--port", "4000"]
-    env_file: .env
+    # Do not send the whole platform .env (JWT/credential key) to a gateway.
+    environment:
+      DATABASE_URL: postgresql://factory:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Run init_env.py first}
+      STORE_MODEL_IN_DB: "True"
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:-${LITELLM_MASTER_KEY}}
+    depends_on:
+      tools-db-init: {condition: service_completed_successfully}
     ports: ["127.0.0.1:4000:4000"]
     volumes: ["./integrations/litellm/config.yaml:/app/config.yaml:ro"]
     extra_hosts: ["host.docker.internal:host-gateway"]
