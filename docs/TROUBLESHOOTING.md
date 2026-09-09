@@ -28,9 +28,22 @@ python3 scripts/init_env.py --repair-data
 
 ## 启动的问题
 
-**init-data 或 migrate exited。** exited(0) 是一次性成功；非零才是失败。查看对应日志。权限问题检查 Linux data 目录归属及是否位于支持相应权限的文件系统，不对整个主机目录递归 chmod777。
+**init-data 或 migrate exited。** exited(0) 是一次性成功；非零才是失败。先看：
 
-**PostgreSQL password authentication failed。** 首次初始化后，容器环境变量改变不会自动修改已有卷中的数据库密码。恢复原 `.env` 或用数据库管理方式更改密码；不要为了修配置立即删卷。
+```bash
+docker compose ps -a
+docker compose logs --tail=160 postgres postgres-auth-sync migrate
+```
+
+新版 `migrate` 会先输出 `Control-plane migration preflight:`。`managed`/`fresh` 会正常执行 Alembic；识别出完整旧结构时会显示 `legacy:rnd_0001` 或 `legacy:rnd_0002`，只写入匹配的 Alembic revision 后继续升级，不删除业务表。如果显示 `CONTROL_PLANE_SCHEMA_INCOMPATIBLE`，说明已有 `rnd_*` 是半迁移或未知结构；脚本会停止且不会 stamp/删表，应先备份并按诊断处理。
+
+**PostgreSQL password authentication failed / PostgreSQL Healthy 但 migrate exit 1。** 覆盖源码、重新生成 `.env`，同时保留旧 `postgres-data` 卷时，卷中的 `factory` 角色仍可能保存旧密码；官方 Postgres 镜像不会因为容器环境变量变化自动修改已有集群密码。开发 Compose 现在增加 `postgres-auth-sync`：通过只在 Postgres 容器间共享的 Unix socket，把本地 `factory` 角色密码同步为当前 `.env`，然后用 TCP 再验证一次，成功后才允许 `migrate` 启动。它只修改登录凭据，不删除数据库、表或卷。检查：
+
+```bash
+docker compose logs --tail=120 postgres-auth-sync migrate
+```
+
+成功应看到 `PostgreSQL credential sync complete.`。不要为解决密码漂移直接执行 `docker compose down -v`。如果你主动修改过 `pg_hba.conf` 禁止本地 socket 认证，auth-sync 会失败并保持数据库不变，此时按你自己的 PostgreSQL 安全策略人工同步角色密码。
 
 **端口被占用。** 修改 Compose 左侧主机端口，例如 `127.0.0.1:8002:8000`，容器之间仍访问 api:8000。产品默认8010、平台8000，不要改错右侧或服务名。
 
