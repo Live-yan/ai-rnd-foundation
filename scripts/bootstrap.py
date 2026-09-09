@@ -48,18 +48,60 @@ def check_contract(source: Path) -> None:
     router = (source / 'frontend/web/src/router/index.ts').read_text(encoding='utf-8')
     if 'export const router' not in router:
         raise RuntimeError('Unsupported upstream router entry; do not patch blindly')
+    menu_processor = (source / 'frontend/web/src/router/MenuProcessor.ts').read_text(encoding='utf-8')
+    if 'export const builtinFrontendRoutes: AppRouteRecord[] = [];' not in menu_processor:
+        raise RuntimeError('Unsupported upstream builtinFrontendRoutes contract; do not patch blindly')
 
 
-def add_route(target: Path, name: str, component_name: str, source: Path) -> None:
+def add_frontend_route(
+    target: Path,
+    name: str,
+    component_name: str,
+    source: Path,
+    *,
+    title: str,
+    icon: str = 'ri:code-box-line',
+) -> None:
+    """Install a first-class mixed-mode frontend route.
+
+    FastapiAdmin authorizes navigation against MenuProcessor's menu list. A direct
+    ``router.addRoute`` call can render a component, but the global route guard will
+    still reject its path and the sidebar will never see it. Register extensions via
+    ``builtinFrontendRoutes`` so menu rendering, permission validation and
+    RouteRegistry all consume the same route definition.
+    """
     view_dir = target / f'frontend/web/src/views/{name}'
     view_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, view_dir / f'{component_name}.vue')
-    router_path = target / 'frontend/web/src/router/index.ts'
-    text = router_path.read_text(encoding='utf-8')
-    marker = f'// AI-RND-EXTENSION:{name}:v1'
-    if marker not in text:
-        text += f'\n{marker}\nrouter.addRoute({{\n  path: "/{name}",\n  name: "rnd-{name}",\n  component: () => import("@/views/{name}/{component_name}.vue"),\n  meta: {{ title: "{name}", hidden: true }},\n}});\n'
-        router_path.write_text(text, encoding='utf-8')
+
+    menu_path = target / 'frontend/web/src/router/MenuProcessor.ts'
+    text = menu_path.read_text(encoding='utf-8')
+    marker = f'// AI-RND-FRONTEND-ROUTE:{name}:v2'
+    if marker in text:
+        return
+
+    needle = 'export const builtinFrontendRoutes: AppRouteRecord[] = [];'
+    if needle not in text:
+        raise RuntimeError('builtinFrontendRoutes extension point changed; refusing to patch blindly')
+
+    route = (
+        f'{marker}\n'
+        'export const builtinFrontendRoutes: AppRouteRecord[] = [\n'
+        '  {\n'
+        f'    path: {json.dumps("/" + name, ensure_ascii=False)},\n'
+        f'    name: {json.dumps("rnd-" + name, ensure_ascii=False)},\n'
+        f'    component: {json.dumps(name + "/" + component_name, ensure_ascii=False)},\n'
+        '    meta: {\n'
+        f'      title: {json.dumps(title, ensure_ascii=False)},\n'
+        f'      icon: {json.dumps(icon, ensure_ascii=False)},\n'
+        '      hidden: false,\n'
+        '      isHide: false,\n'
+        '      keepAlive: true,\n'
+        '    },\n'
+        '  },\n'
+        '];'
+    )
+    menu_path.write_text(text.replace(needle, route, 1), encoding='utf-8')
 
 
 def fetch_upstream(target: Path) -> None:
@@ -97,10 +139,18 @@ def assemble(source: Path, destination: Path, *, replace: bool = False) -> None:
             raise RuntimeError('runtime already exists. Use --replace-runtime only after saving local edits.')
         shutil.rmtree(destination)
     copy_source(source, destination)
-    add_route(destination, 'factory', 'FactoryConsole', ROOT / 'overlays/platform/FactoryConsole.vue')
+    add_frontend_route(
+        destination,
+        'factory',
+        'FactoryConsole',
+        ROOT / 'overlays/platform/FactoryConsole.vue',
+        title='AI 软件开发平台',
+    )
     # Build-only configuration: no credentials and no cross-origin API.
+    # copy_source intentionally excludes upstream .env files, so access mode must be explicit.
     (destination / 'frontend/web/.env.production').write_text(
         'VITE_APP_ENV=prod\nVITE_APP_TITLE=AI R&D Factory\n'
+        'VITE_ACCESS_MODE=mixed\n'
         f'VITE_BASE_URL={frontend_public_base()}\n'
         f'VITE_APP_BASE_API={MANIFEST["root_path"]}\n'
         'VITE_API_BASE_URL=http://127.0.0.1:8000\nVITE_DROP_CONSOLE=true\n', encoding='utf-8')
