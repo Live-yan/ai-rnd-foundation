@@ -7,6 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.12.10'
@@ -14,11 +16,18 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y graphviz
       - run: uv sync --extra dev
       - run: uv run pytest --junitxml=reports/junit-ci.xml
+      - name: Record exact source under test (tracked files only, no credentials)
+        if: always()
+        run: |
+          mkdir -p reports
+          git rev-parse HEAD > reports/source-commit.txt
+          git archive --format=tar --output=reports/source-under-test.tar HEAD
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: contract-results
           path: reports/
+          retention-days: 7
 
   frontend-smoke:
     runs-on: ubuntu-latest
@@ -39,6 +48,4 @@ jobs:
       - name: Verify root-path-aware asset URLs
         run: python3 scripts/verify_frontend_dist.py frontend-dist /api/v1/web/
 
-  # Model/sandbox/external-service E2E remains intentionally separate because it needs
-  # protected secrets, budgets, and sandbox policy. The frontend smoke above is secret-free
-  # and builds the actual pinned FastapiAdmin frontend used by the platform.
+  # External-service E2E requires administrator-provided endpoints and credentials.
