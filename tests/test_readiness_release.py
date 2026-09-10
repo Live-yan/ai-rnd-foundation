@@ -93,14 +93,19 @@ def test_c4_metadata_is_data_and_duplicate_labels_are_disambiguated():
     assert dsl_quote('a\u2028b') == '"a b"'
 
 
-def test_cube_image_uses_locked_dependencies_and_system_python_without_tls_bypass():
+def test_cube_image_uses_locked_dependencies_and_portable_python_without_tls_bypass():
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "integrations/cube/Dockerfile.fullstack").read_text()
     assert "UV_PYTHON_DOWNLOADS=never" in dockerfile
-    assert "--python /usr/bin/python3.12" in dockerfile
+    assert "UV_PYTHON_INSTALL_DIR=/opt/rnd-python" in dockerfile
+    assert "UV_NATIVE_TLS=true" in dockerfile
+    assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in dockerfile
+    assert "--python 3.12 --no-python-downloads" in dockerfile
     assert "--frozen --no-dev" in dockerfile
     assert "/app/runtime/combined/uv.lock" in dockerfile
-    assert "uv python install" not in dockerfile
+    assert "uv python install 3.12" in dockerfile
+    assert "python3.12-venv" not in dockerfile
+    assert "COPY --from=cache /usr/local/bin/python" not in dockerfile
     assert "allow-insecure-host" not in dockerfile
     assert not any(line.startswith(("CMD ", "ENTRYPOINT ")) for line in dockerfile.splitlines())
     workflow = (root / ".github/workflows/tests.yml").read_text()

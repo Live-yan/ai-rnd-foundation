@@ -42,7 +42,10 @@ jobs:
         if: always()
         with:
           name: contract-results
-          path: reports/
+          path: |
+            reports/junit-ci.xml
+            reports/source-commit.txt
+            reports/source-under-test.tar
           retention-days: 7
 
   frontend-smoke:
@@ -138,18 +141,24 @@ jobs:
       - name: Build distributable Coder and Cube verifier images
         run: |
           docker builder prune -af
-          docker build -t ai-rnd-coder:0.2.0 integrations/coder
-          docker run --rm --network none --entrypoint sh ai-rnd-coder:0.2.0 -c 'test "$(id -u)" != 0 && python3 --version && uv --version && node --version && pnpm --version'
-          docker build -f integrations/cube/Dockerfile.fullstack -t ai-rnd-cube-verifier:ci .
-          docker run --rm --entrypoint /opt/rnd-runtime/.venv/bin/python ai-rnd-cube-verifier:ci -c 'import sqlalchemy,redis,fastapi;from pathlib import Path;assert Path("/opt/rnd-verifier/full_stack.py").is_file()'
+          python3 scripts/ci_capture.py --name coder-build -- docker build --progress=plain -t ai-rnd-coder:0.2.0 integrations/coder
+          python3 scripts/ci_capture.py --name coder-runtime -- docker run --rm --network none --entrypoint sh ai-rnd-coder:0.2.0 -c 'test "$(id -u)" != 0 && python3 --version && uv --version && node --version && pnpm --version'
+          python3 scripts/ci_capture.py --name cube-build -- docker build --progress=plain -f integrations/cube/Dockerfile.fullstack -t ai-rnd-cube-verifier:ci .
+          python3 scripts/ci_capture.py --name cube-runtime -- docker run --rm --user 10001:10001 --network none --entrypoint /opt/rnd-runtime/.venv/bin/python ai-rnd-cube-verifier:ci -c 'import sqlalchemy,redis,fastapi,ssl,sys,os;from pathlib import Path;assert os.geteuid()==10001;assert sys.version_info[:2]==(3,12);assert ssl.create_default_context().get_ca_certs();assert Path("/opt/rnd-verifier/full_stack.py").is_file();print(sys.version);print(Path("/etc/os-release").read_text())'
       - name: Run offline product acceptance inside the actual Cube image
-        run: bash scripts/verify_cube_image.sh
+        run: python3 scripts/ci_capture.py --name cube-acceptance --timeout 780 -- bash scripts/verify_cube_image.sh
       - name: Verify optional tool consoles can start without model credentials
         run: |
           docker builder prune -af
           python3 scripts/setup_toolchain.py
           docker compose -f compose.yaml -f compose.tools.yaml --profile ai --profile tools up -d litellm coder
           python3 scripts/check_tool_consoles.py --workspace-network ai-rnd_default
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-image-reports
+          path: image-build-reports/
+          retention-days: 7
       - name: Collect worker diagnostics on failure
         if: failure()
         run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=180 postgres postgres-auth-sync migrate worker
