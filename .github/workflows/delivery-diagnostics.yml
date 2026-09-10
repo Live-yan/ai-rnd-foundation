@@ -20,13 +20,17 @@ jobs:
           set -euo pipefail
           gh run view 34405899587 --repo Live-yan/ai-rnd-foundation --job 102649062635 --log > "$RUNNER_TEMP/previous-job.log"
           python3 - <<'PY'
-          import os
+          import os, re
           from pathlib import Path
           lines = Path(os.environ['RUNNER_TEMP'], 'previous-job.log').read_text().splitlines()
-          # Export only dependency/image build output, never platform environment,
-          # runtime data, authorization headers or application diagnostics.
-          selected = [line for line in lines if '\tBuild distributable Coder and Cube verifier images\t' in line]
-          assert selected, 'Image-build section missing from job log'
+          # Step names may be UNKNOWN STEP in gh fallback logs. These UTC bounds
+          # are from the actual Actions job step metadata, not a guessed tail.
+          selected = []
+          for line in lines:
+              stamp = re.search(r'2026-09-09T\d\d:\d\d:\d\d', line)
+              if stamp and '2026-09-09T21:22:44' <= stamp[0] < '2026-09-09T21:23:21':
+                  selected.append(line)
+          assert selected, 'Image-build time range missing from job log'
           text = '\n'.join(selected[-100:]) + '\n'
           out = Path('build-diagnostics')
           out.mkdir()
