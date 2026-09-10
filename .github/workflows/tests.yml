@@ -106,6 +106,15 @@ jobs:
           docker build --target frontend -t ai-rnd-frontend-smoke .
           docker build -t ai-rnd-foundation:0.1.0 .
           docker build -f Dockerfile.acceptance -t ai-rnd-acceptance:ci .
+      - name: Capture tested dependency locks without runtime credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p image-build-reports
+          cid="$(docker create ai-rnd-foundation:0.1.0)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/app/runtime/combined/uv.lock" image-build-reports/host.uv.lock
+          docker cp "$cid:/app/runtime/combined/pyproject.toml" image-build-reports/host.pyproject.toml
       - name: Prove existing-volume PostgreSQL password recovery
         shell: bash
         run: |
@@ -231,3 +240,25 @@ jobs:
           name: c4-parser-contract
           path: c4-reports/
           retention-days: 7
+
+  delivery:
+    needs: [contracts, frontend-smoke, core-stack, coder-template, c4-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: ci-evidence
+      - name: Verify all receipts and assemble immutable source and evidence
+        run: >-
+          python3 scripts/build_delivery.py --evidence ci-evidence --output delivery
+          --source-commit "$GITHUB_SHA"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-delivery
+          path: delivery/
+          retention-days: 14

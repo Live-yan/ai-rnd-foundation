@@ -22,6 +22,8 @@ Windows 用户在已启用 Docker Desktop WSL 集成的 Ubuntu 中执行。首�
 
 Actions 检查 Python 合同、前端构建/类型/四种视口、真实核心服务与生成产品、工具镜像和 Coder 模板。**当前提交是否通过请查看其 Checks**；夹具模型不代表真实账号、外部 Cube/KVM、MCP 或生产安全已联调。
 
+五项检查全部成功后，`delivery` 作业会再次核对同次运行的证据和哈希，生成 `verified-delivery` 源码包、证据包、依赖锁及校验清单。失败/跳过/取消不会发布通过验收的交付包。详见 [当前交付门禁](docs/VALIDATION_REPORT.md)。
+
 ## 文档
 
 - [联调清单、各工具配置与服务地址](docs/INTEGRATION_ACCEPTANCE.md)

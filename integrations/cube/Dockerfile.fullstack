@@ -14,7 +14,7 @@ COPY --from=cache /app/runtime/combined/pyproject.toml /app/runtime/combined/uv.
 # install it in /opt (not root's private HOME) for the unprivileged verifier.
 ENV UV_PYTHON_INSTALL_DIR=/opt/rnd-python UV_PYTHON_PREFERENCE=only-managed \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt UV_NATIVE_TLS=true
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y --no-install-recommends \
         postgresql redis-server ca-certificates libstdc++6 git graphviz fonts-noto-cjk \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

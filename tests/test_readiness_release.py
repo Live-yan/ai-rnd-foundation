@@ -96,6 +96,7 @@ def test_c4_metadata_is_data_and_duplicate_labels_are_disambiguated():
 def test_cube_image_uses_locked_dependencies_and_portable_python_without_tls_bypass():
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "integrations/cube/Dockerfile.fullstack").read_text()
+    assert "DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install" in dockerfile
     assert "UV_PYTHON_DOWNLOADS=never" in dockerfile
     assert "UV_PYTHON_INSTALL_DIR=/opt/rnd-python" in dockerfile
     assert "UV_NATIVE_TLS=true" in dockerfile
