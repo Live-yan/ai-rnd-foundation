@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 
@@ -10,6 +11,7 @@ from ..config import Settings
 from ..schemas import ProjectSpec
 from .catalog import JSON_FORMAT_PROVIDERS, NO_KEY_PROVIDERS, PROVIDER_PREFIX
 from .registry import ProviderRuntime
+from .options import option_kwargs
 
 SYSTEM_PROMPT = """You are the planning engine of an AI software R&D platform.
 Convert only the clarified requirements into the provided ProjectSpec JSON schema.
@@ -60,6 +62,10 @@ class ModelGateway:
         *,
         max_tokens: int | None = None,
     ) -> dict[str, Any]:
+        if profile.provider == "chatgpt":
+            from .oauth import subscription_completion
+            content = await subscription_completion(self.settings, profile, system, payload)
+            return _extract_json(content)
         from ..privacy import install_sdk_log_safety
         install_sdk_log_safety()
         try:
@@ -88,6 +94,13 @@ class ModelGateway:
             "max_tokens": max_tokens or profile.max_tokens,
             "timeout": self.settings.model_timeout,
         }
+        kwargs.update(option_kwargs(profile.provider, profile.litellm_params))
+        if profile.provider in {"bedrock", "vertex_ai"}:
+            kwargs.pop("api_key", None)
+            required = {"aws_access_key_id", "aws_secret_access_key"} if profile.provider == "bedrock" else {"vertex_credentials"}
+            if not all(profile.credentials.get(k) for k in required):
+                raise ValueError("Configure this profile's cloud credentials; ambient server credentials are never selected")
+            kwargs.update({k:v for k,v in profile.credentials.items() if v and (k.startswith("aws_") if profile.provider == "bedrock" else k == "vertex_credentials")})
         if profile.api_version:
             kwargs["api_version"] = profile.api_version
         if profile.base_url:
@@ -95,7 +108,7 @@ class ModelGateway:
         if profile.provider in JSON_FORMAT_PROVIDERS:
             kwargs["response_format"] = {"type": "json_object"}
         try:
-            response = await acompletion(**kwargs)
+            response = await asyncio.wait_for(acompletion(**kwargs), timeout=kwargs["timeout"])
         except Exception as exc:
             status = getattr(exc, "status_code", None)
             suffix = f" (HTTP {status})" if isinstance(status, int) else ""

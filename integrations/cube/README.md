@@ -1,33 +1,13 @@
-# CubeSandbox：远端 KVM MicroVM 执行适配器
+# CubeSandbox：隔离执行与完整产品验收
 
-本包通过 `e2b-code-interpreter` SDK 实现 `Sandbox.create`、上传交付 ZIP、固定命令检查、结果回传和 context manager 清理。当前用途是 **source verification**，不是完整 FastapiAdmin + PostgreSQL + Redis + 浏览器测试，也没有自由编码 Agent 自动驻留 Cube 的实现。
+当前版本区分基础模式的 `source_only` 和完整模式的 `generated_crud_stack`。完整模式不接受仅源码检查冒充全栈验收。
 
-## 运行条件
+模板镜像配方为 `Dockerfile.fullstack`，保留官方 Cube 基座的 envd/agent，预装固定验收器、Python 依赖和前端缓存、PostgreSQL/Redis。构建步骤见 `docs/FINAL_CONSTRAINTS.md`；详细网络与工具配置见 `docs/INTEGRATION_ACCEPTANCE.md`。`Dockerfile.verifier` 是普通 Docker 源码检查镜像，不能当成完整 Cube MicroVM 模板。
 
-你需要可运行 KVM 的 Linux 环境，验证 `/dev/kvm` 可用，并按官方 CubeSandbox 文档部署 CubeAPI、控制面、Cubelet、数据面及模板。Windows + AMD CPU 不自动等于 WSL/Docker 内已有可用 KVM。可以把平台放 Windows WSL，把 Cube 放私有 Linux 服务器；默认小规模流程不需要 Kubernetes，也不强制安装 Cube。
+你需要实际 Linux/KVM、可用 Cube 控制面和已导入模板。Windows/WSL/Docker 能启动平台不代表 `/dev/kvm` 或 Cube 模板已可用。平台可以在 WSL，Cube 服务部署到受控 Linux 服务器。建议全栈模板至少 6 GiB 内存。
 
-Cube 官方 quickstart 使用 `E2B_API_URL`（例如私网节点 3000 端口），不是把普通公网域名随意塞入 SDK 的 domain 参数。平台设置：
+在工具链 Cube 卡片填写实际 API URL、API Key 和 Template ID，或设置同名 `FACTORY_CUBE_*` 环境默认值。不得使用伪造模板 ID、跳过 TLS 校验或把 E2B 公有服务默认当成你的 Cube。
 
-```dotenv
-FACTORY_CUBE_API_URL=https://your-private-cube-api.example
-FACTORY_CUBE_API_KEY=REPLACE_WITH_A_REAL_KEY
-FACTORY_CUBE_TEMPLATE=REPLACE_WITH_A_VERIFIED_TEMPLATE_ID
-```
+适配器上传本次源码 ZIP，在沙箱中以非 root 的 factory 用户执行镜像内固定验收命令。验收器创建自己的临时 PG/Redis、构建/类型检查前端，验证原生 FastapiAdmin 登录及用户归属隔离，返回与上传 ZIP SHA-256 绑定的报告。完成后 context manager 回收沙箱；失败不回退到宿主机执行。
 
-HTTP 仅限受信任隔离私网测试；正式连接使用有效 TLS 证书。不要 `verify=False` 跳过校验。若使用内部 CA，应把该 CA 加入信任链。
-
-## 模板必须具备什么
-
-官方 sandbox-code 镜像提供 Cube 所需 agent/envd；模板中还应有 Python、可写 `/home/user` 和足够磁盘。平台提交的是 stdlib 源码检查任务，所以不依赖安装业务项目的所有依赖。`Dockerfile.verifier` 是 **Docker 验证器镜像**，不能直接当成一个具备 Cube agent/envd 的官方 MicroVM 模板。
-
-官方模板创建命令见 S06；镜像先在你的环境验证并锁定 tag/digest，记录 template ID。不要自动使用教程里的 `latest` 作为生产固定版本。
-
-```bash
-docker compose exec worker python scripts/probe_integrations.py cube
-```
-
-此探针会实际创建临时 sandbox、执行固定的 Python 版本检查并销毁，会消耗你的 Cube 资源。确认 endpoint、配额和模板后再运行。随后在 UI 选择 cube 验证一个示例产物，查看质量报告中的 cube 结果。
-
-## 隔离并非一句 allow_internet_access=False
-
-适配器禁用公网出站、设置超时并在退出时回收；但公网出站禁用不等于所有内网资产都不可达。Cube 管理员还应限制私网网段、平台 PG/Redis/metadata 地址和文件大小，设置资源/数量配额。未通过这些隔离验收前，不把它开放给不可信租户。
+外网关闭不等于全部内网隔离。部署者还需禁止沙箱访问云元数据、平台数据库、管理端口，设置实例/时间/费用上限。真实集群模板注册、SDK 兼容、网络、资源回收和配额须在你的环境验收。CI 中相同验收器在一次性容器通过，不代表你的外部 MicroVM 已运行成功。

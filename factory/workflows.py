@@ -25,7 +25,7 @@ class GenerateProductWorkflow:
             )
             plan_result = await workflow.execute_activity(
                 "rnd.plan", {"run_id": run_id, "context": context.get("context", "")},
-                start_to_close_timeout=timedelta(minutes=5), retry_policy=RetryPolicy(maximum_attempts=1),
+                start_to_close_timeout=timedelta(minutes=8), retry_policy=RetryPolicy(maximum_attempts=1),
             )
             await workflow.execute_activity(
                 "rnd.analysis_pack", run_id, start_to_close_timeout=timedelta(minutes=6),

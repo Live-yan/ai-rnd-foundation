@@ -168,7 +168,9 @@ def install_factory_frontend(target: Path) -> None:
 
     api_dir = target / 'frontend/web/src/api/module_factory'
     api_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT / 'overlays/platform/api/index.ts', api_dir / 'index.ts')
+    for asset in (ROOT / 'overlays/platform/api').iterdir():
+        if asset.is_file():
+            shutil.copy2(asset, api_dir / asset.name)
 
     menu_path = target / 'frontend/web/src/router/MenuProcessor.ts'
     text = menu_path.read_text(encoding='utf-8')

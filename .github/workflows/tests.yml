@@ -1,10 +1,26 @@
 name: Foundation contracts
 on: [push, pull_request, workflow_dispatch]
+concurrency:
+  group: foundation-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   contracts:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: contract
+          POSTGRES_PASSWORD: disposable-contract-only
+          POSTGRES_DB: contract
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U contract -d contract"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    env:
+      FACTORY_TEST_POSTGRES_URL: postgresql+psycopg://contract:disposable-contract-only@127.0.0.1:55433/contract
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,7 +42,10 @@ jobs:
         if: always()
         with:
           name: contract-results
-          path: reports/
+          path: |
+            reports/junit-ci.xml
+            reports/source-commit.txt
+            reports/source-under-test.tar
           retention-days: 7
 
   frontend-smoke:
@@ -47,6 +66,29 @@ jobs:
           trap - EXIT
       - name: Verify root-path-aware asset URLs
         run: python3 scripts/verify_frontend_dist.py frontend-dist /api/v1/web/
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser test dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/rnd-browser" --no-save playwright@1.58.2
+          "$RUNNER_TEMP/rnd-browser/node_modules/.bin/playwright" install --with-deps chromium
+          sudo apt-get install -y fonts-noto-cjk
+      - name: Render actual workbench components inside an embedded shell
+        run: |
+          docker run -d --name rnd-browser -p 127.0.0.1:4173:4173 -v "$PWD/tests/ui:/checks:ro" ai-rnd-frontend-smoke node /checks/serve.cjs
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:4173/ >/dev/null
+          NODE_PATH="$RUNNER_TEMP/rnd-browser/node_modules" node tests/ui/browser.cjs
+      - name: Browser harness diagnostics
+        if: failure()
+        run: docker logs rnd-browser || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: embedded-layout-reports
+          path: ui-reports/
+          retention-days: 7
 
   # External-service E2E requires administrator-provided endpoints and credentials.
 
@@ -64,12 +106,21 @@ jobs:
           docker build --target frontend -t ai-rnd-frontend-smoke .
           docker build -t ai-rnd-foundation:0.1.0 .
           docker build -f Dockerfile.acceptance -t ai-rnd-acceptance:ci .
+      - name: Capture tested dependency locks without runtime credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p image-build-reports
+          cid="$(docker create ai-rnd-foundation:0.1.0)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/app/runtime/combined/uv.lock" image-build-reports/host.uv.lock
+          docker cp "$cid:/app/runtime/combined/pyproject.toml" image-build-reports/host.pyproject.toml
       - name: Prove existing-volume PostgreSQL password recovery
         shell: bash
         run: |
           set -euo pipefail
           compose=(docker compose -f compose.yaml -f compose.ci.yaml)
-          "${compose[@]}" up -d postgres
+          "${compose[@]}" up -d --wait --wait-timeout 120 postgres
           # Simulate a database volume initialized by an older .env.
           "${compose[@]}" exec -T -u postgres postgres \
             psql -U factory -d postgres -v ON_ERROR_STOP=1 \
@@ -83,6 +134,40 @@ jobs:
         run: docker compose -f compose.yaml -f compose.ci.yaml up -d redis worker
       - name: Exercise clarification, approval, delivery and genuine product authentication
         run: timeout 900 docker compose -f compose.yaml -f compose.ci.yaml run --use-aliases --rm acceptance
+      - name: Validate generated C4 DSL with the actual Structurizr parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          dsl="$(sudo find data/runs -path '*/analysis/architecture/workspace.dsl' -print -quit)"
+          test -n "$dsl"
+          # Stage only the generated DSL, not credentials or the private run tree.
+          dir="$(mktemp -d "$RUNNER_TEMP/rnd-c4.XXXXXX")"
+          trap 'rm -rf "$dir"' EXIT
+          sudo install -m 0644 "$dsl" "$dir/workspace.dsl"
+          sudo chown "$(id -u):$(id -g)" "$dir/workspace.dsl"
+          docker run --rm --user "$(id -u):$(id -g)" --network none --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=1g --pids-limit=256 --tmpfs /tmp:rw,nosuid,size=128m --mount "type=bind,source=$dir,target=/usr/local/structurizr,readonly" --entrypoint java structurizr/structurizr:2026.06.28-noble -jar /usr/local/structurizr.war validate -w /usr/local/structurizr/workspace.dsl
+          echo '{"structurizr_parser":"passed","source":"generated_analysis"}' | sudo tee data/ci-reports/structurizr.json >/dev/null
+      - name: Build distributable Coder and Cube verifier images
+        run: |
+          docker builder prune -af
+          python3 scripts/ci_capture.py --name coder-build -- docker build --progress=plain -t ai-rnd-coder:0.2.0 integrations/coder
+          python3 scripts/ci_capture.py --name coder-runtime -- docker run --rm --network none --entrypoint sh ai-rnd-coder:0.2.0 -c 'test "$(id -u)" != 0 && python3 --version && uv --version && node --version && pnpm --version'
+          python3 scripts/ci_capture.py --name cube-build -- docker build --progress=plain -f integrations/cube/Dockerfile.fullstack -t ai-rnd-cube-verifier:ci .
+          python3 scripts/ci_capture.py --name cube-runtime -- docker run --rm --user 10001:10001 --network none --entrypoint /opt/rnd-runtime/.venv/bin/python ai-rnd-cube-verifier:ci -c 'import sqlalchemy,redis,fastapi,ssl,sys,os;from pathlib import Path;assert os.geteuid()==10001;assert sys.version_info[:2]==(3,12);assert ssl.create_default_context().get_ca_certs();assert Path("/opt/rnd-verifier/full_stack.py").is_file();print(sys.version);print(Path("/etc/os-release").read_text())'
+      - name: Run offline product acceptance inside the actual Cube image
+        run: python3 scripts/ci_capture.py --name cube-acceptance --timeout 780 -- bash scripts/verify_cube_image.sh
+      - name: Verify optional tool consoles can start without model credentials
+        run: |
+          docker builder prune -af
+          python3 scripts/setup_toolchain.py
+          docker compose -f compose.yaml -f compose.tools.yaml --profile ai --profile tools up -d litellm coder
+          python3 scripts/check_tool_consoles.py --workspace-network ai-rnd_default
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-image-reports
+          path: image-build-reports/
+          retention-days: 7
       - name: Collect worker diagnostics on failure
         if: failure()
         run: docker compose -f compose.yaml -f compose.ci.yaml logs --no-color --tail=180 postgres postgres-auth-sync migrate worker
@@ -102,6 +187,78 @@ jobs:
           name: core-stack-acceptance
           path: core-stack-reports/
           retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tool-console-readiness
+          path: tool-console-reports/
+          retention-days: 7
       - name: Remove this job's disposable stack
         if: always()
-        run: docker compose -f compose.yaml -f compose.ci.yaml down --volumes --remove-orphans
+        run: docker compose -f compose.yaml -f compose.ci.yaml -f compose.tools.yaml --profile ai --profile tools down --volumes --remove-orphans
+
+  coder-template:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+      - name: Validate template schema without provisioning or credentials
+        working-directory: integrations/coder
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate -no-color
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coder-template-lock
+          include-hidden-files: true
+          path: integrations/coder/.terraform.lock.hcl
+          retention-days: 7
+
+  c4-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.10'
+          python-version: '3.12'
+      - run: uv sync --extra dev
+      - name: Parse generator output, Unicode and hostile-label cases
+        run: uv run python -m scripts.verify_c4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: c4-parser-contract
+          path: c4-reports/
+          retention-days: 7
+
+  delivery:
+    needs: [contracts, frontend-smoke, core-stack, coder-template, c4-contract]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: ci-evidence
+      - name: Verify all receipts and assemble immutable source and evidence
+        run: >-
+          python3 scripts/build_delivery.py --evidence ci-evidence --output delivery
+          --source-commit "$GITHUB_SHA"
+          --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-delivery
+          path: delivery/
+          retention-days: 14

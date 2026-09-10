@@ -12,12 +12,19 @@ from .catalog import HOSTED_ORIGINS
 
 
 def origin(value: str) -> str:
-    parsed = urlsplit(value)
+    if "\\" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise HTTPException(422, "Invalid model endpoint characters")
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        raise HTTPException(422, "Invalid model endpoint") from None
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise HTTPException(422, "Model endpoint must not include credentials, query or fragment")
     try:
         port = parsed.port
     except ValueError:
         raise HTTPException(422, "Invalid model endpoint port") from None
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or port == 0:
         raise HTTPException(422, "Model endpoint must be an absolute HTTP(S) URL")
     host = parsed.hostname.lower()
     if ":" in host:
@@ -38,4 +45,4 @@ def validate_model_origin(provider: str, base_url: str, settings: Settings) -> N
             return
     allowed = {origin(value) for value in settings.model_allowed_origins}
     if selected not in allowed:
-        raise HTTPException(422, "自定义模型地址未获管理员批准。请将其 origin 加入 FACTORY_MODEL_ALLOWED_ORIGINS 后重启 API/worker")
+        raise HTTPException(422, "自定义模型地址未获管理员批准。请由管理员修改 FACTORY_MODEL_ALLOWED_ORIGINS 后重启 API/worker；当前页面不修改出口白名单")

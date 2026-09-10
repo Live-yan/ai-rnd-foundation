@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from typing import Callable, Literal
+from starlette.concurrency import run_in_threadpool
+from factory.tool_settings import ToolSettingsService, ToolSettingsInput
+from factory.providers.oauth import OAuthService
+from factory.providers.export_config import export_config
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Header
 from fastapi.routing import APIRoute
@@ -36,21 +40,26 @@ def _legacy(request: Request) -> bool:
 
 
 def create_router(db: Database, settings: Settings, actor_dependency: Callable, *,
-                  route_class: type[APIRoute] = APIRoute, response_factory: Callable | None = None) -> APIRouter:
+                  route_class: type[APIRoute] = APIRoute, response_factory: Callable | None = None, admin_dependency: Callable | None = None) -> APIRouter:
     router = APIRouter(tags=["AI研发平台"])
     core = APIRouter(route_class=route_class)
     repo = Repository(db)
     providers = ProviderService(db, settings)
     service = WorkbenchService(db, settings)
+    config_service = ToolSettingsService(db, settings)
+    oauth = OAuthService(db, settings)
+    is_admin = admin_dependency or (lambda: False)
 
     def _success(data=None, msg: str = "操作成功", status_code: int = 200):
         if response_factory is not None:
-            return response_factory(data=data, msg=msg, status_code=status_code)
-        return JSONResponse(jsonable_encoder({"code": 0, "msg": msg, "data": data, "success": True}), status_code=status_code)
+            response = response_factory(data=data, msg=msg, status_code=status_code)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return JSONResponse(jsonable_encoder({"code": 0, "msg": msg, "data": data, "success": True}), status_code=status_code, headers={"Cache-Control": "no-store"})
 
     def _response(request: Request, data=None, msg: str = "操作成功"):
         if _legacy(request):
-            return data
+            return JSONResponse(jsonable_encoder(data), headers={"Cache-Control": "no-store"}, status_code=request.scope["route"].status_code or 200)
         return _success(data, msg, request.scope["route"].status_code or 200)
 
     @core.get("/health")
@@ -66,14 +75,57 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     @core.get("/integrations")
     def integrations(request: Request, actor: str = Depends(actor_dependency)):
-        rows = toolchain_status(settings, sum(1 for item in providers.list(actor) if item["enabled"]))
+        rows = toolchain_status(config_service.effective(), sum(1 for item in providers.list(actor) if item["enabled"]))
         if _legacy(request):
             return {row["id"]: ("configured" if row["configured"] else "not_configured") for row in rows}
         return _success(rows, "工具链状态获取成功")
 
     @core.get("/toolchain")
     def toolchain(request: Request, actor: str = Depends(actor_dependency)):
-        return _response(request, toolchain_status(settings, sum(1 for item in providers.list(actor) if item["enabled"])), "工具链状态获取成功")
+        return _response(request, toolchain_status(config_service.effective(), sum(1 for item in providers.list(actor) if item["enabled"])), "工具链状态获取成功")
+
+    @core.get("/toolchain/{tool}/config")
+    def tool_config(request: Request, tool: str, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
+        return _response(request, config_service.describe(tool, editable=admin))
+
+    @core.post("/toolchain/{tool}/probe")
+    async def test_integration(request: Request, tool: str, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
+        if not admin:
+            raise HTTPException(403, "Administrator required")
+        config_service.describe(tool, editable=False)
+        from factory.tool_probe import probe
+        return _response(request, await probe(tool, config_service.effective()))
+
+    @core.put("/toolchain/{tool}/config")
+    def save_tool_config(request: Request, tool: str, value: ToolSettingsInput, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
+        if not admin:
+            raise HTTPException(403, "只有系统管理员可以修改全局工具配置")
+        return _response(request, config_service.save(tool, value), "已保存；后续 API/活动读取新配置，外部服务部署仍需独立完成")
+
+    @core.delete("/toolchain/{tool}/config")
+    def reset_tool_config(request: Request, tool: str, revision: int, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
+        if not admin:
+            raise HTTPException(403, "Administrator required")
+        return _response(request, config_service.reset(tool, revision), "已恢复环境默认值；已保存覆盖值和凭据已清除")
+
+    @core.post("/providers/export")
+    def export_providers(request: Request, actor: str = Depends(actor_dependency)):
+        return _response(request, export_config(providers.list(actor)))
+
+    @core.post("/providers/{provider_id}/oauth/{action}")
+    async def subscription_auth(request: Request, provider_id: str, action: Literal["begin", "poll", "disconnect"], actor: str = Depends(actor_dependency)):
+        result = await run_in_threadpool(oauth.operation, actor, provider_id, action)
+        return _response(request, result)
+
+    @core.get("/providers/{provider_id}/oauth")
+    async def subscription_status(request: Request, provider_id: str, actor: str = Depends(actor_dependency)):
+        return _response(request, await run_in_threadpool(oauth.operation, actor, provider_id, "status"))
+
+    @core.post("/providers/{provider_id}/discover")
+    async def discover_saved_provider(request: Request, provider_id: str, actor: str = Depends(actor_dependency)):
+        profile = await run_in_threadpool(providers.runtime, actor, provider_id)
+        models = await discover_models(config_service.effective(), profile.provider, profile.base_url, profile.api_key)
+        return _response(request, {"models": models})
 
     @core.get("/providers/catalog")
     def provider_catalog(request: Request, actor: str = Depends(actor_dependency)):
@@ -107,7 +159,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     @core.post("/providers/discover")
     async def discover_provider_models(request: Request, value: DiscoverInput, actor: str = Depends(actor_dependency)):
-        models = await discover_models(settings, value.provider, value.base_url, value.api_key)
+        models = await discover_models(config_service.effective(), value.provider, value.base_url, value.api_key)
         return _response(request, {"models": models}, f"已发现 {len(models)} 个模型")
 
     @core.post("/projects", status_code=201)
@@ -136,6 +188,8 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
         standard = not _legacy(request)
         if standard and not value.expected_revision:
             raise HTTPException(428, "请提交当前项目 expected_revision；刷新需求分析后再启动")
+        if value.provider == "demo" and not value.provider_id and not settings.allow_legacy_demo:
+            raise HTTPException(422, "固定 Demo 仅用于显式启用的本地测试；请先选择模型完成需求澄清")
         if standard and value.provider == "demo" and not value.provider_id:
             raise HTTPException(422, "新版工作台不允许固定 Demo 冒充 AI 分析；请配置真实模型供应商")
         if value.provider_id:
@@ -144,11 +198,12 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
         elif value.provider != "demo":
             profile = providers.runtime(actor, None)
             value = value.model_copy(update={"provider": "litellm", "provider_id": profile.id})
-        if value.use_serena and not settings.serena_url:
+        active_settings = config_service.effective()
+        if value.use_serena and not active_settings.serena_url:
             raise HTTPException(422, "Configure the scoped ToolHive/Serena MCP endpoint first")
-        if value.sandbox == "cube" and not all([settings.cube_api_url, settings.cube_api_key, settings.cube_template]):
+        if value.sandbox == "cube" and not all([active_settings.cube_api_url, active_settings.cube_api_key, active_settings.cube_template]):
             raise HTTPException(422, "Cube API URL, key, and verified template are all required")
-        if value.sandbox == "docker" and not settings.docker_host_data_dir:
+        if value.sandbox == "docker" and not active_settings.docker_host_data_dir:
             raise HTTPException(422, "Configure Docker host-side data path and the sandbox override compose file")
         if not settings.upstream_dir.joinpath("LICENSE").exists():
             raise HTTPException(503, "Upstream template is missing; run scripts/bootstrap.py")
@@ -158,7 +213,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
             if value.sandbox != "cube" or not value.use_serena or not value.provision_coder:
                 raise HTTPException(422, "完整模式固定启用 ToolHive/Serena、CubeSandbox 和 Coder；部分执行请切换到基础模式")
             try:
-                require_full_toolchain(settings, owner=actor, provider_count=sum(1 for item in providers.list(actor) if item["enabled"]), sandbox=value.sandbox, provision_coder=value.provision_coder)
+                require_full_toolchain(active_settings, owner=actor, provider_count=sum(1 for item in providers.list(actor) if item["enabled"]), sandbox=value.sandbox, provision_coder=value.provision_coder)
             except ValueError as exc:
                 raise HTTPException(422, str(exc)) from exc
         return _response(request, repo.create_run(actor, project_id, value), "研发流水线已提交 Temporal")
@@ -206,14 +261,15 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     @core.post("/runs/{run_id}/coder")
     async def coder(request: Request, run_id: str, actor: str = Depends(actor_dependency)):
-        if not settings.coder_owner_id or actor != settings.coder_owner_id:
+        active_settings = config_service.effective()
+        if not active_settings.coder_owner_id or actor != active_settings.coder_owner_id:
             raise HTTPException(403, "Coder provisioning is restricted to the explicitly configured administrator")
         run_value = repo.get_run(actor, run_id)
         if run_value["status"] != "READY":
             raise HTTPException(409, "Finish generating the source archive first")
         from factory.providers.coder import CoderClient
         try:
-            result = await CoderClient(settings).create_workspace(run_id)
+            result = await CoderClient(active_settings).create_workspace(run_id)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         except RuntimeError as exc:

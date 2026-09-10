@@ -1,5 +1,5 @@
-# Build ai-rnd-acceptance:ci first from this exact revision. The final image keeps
-# Cube's envd/agent and entrypoint; it is NOT the plain Docker source verifier.
+# Build ai-rnd-acceptance:ci first from this exact revision. Keep Cube's
+# Ubuntu 22.04 base, envd, agent and original ENTRYPOINT/CMD intact.
 FROM ai-rnd-acceptance:ci AS cache
 FROM ghcr.io/tencentcloud/cubesandbox-base:2026.16
 USER root
@@ -9,15 +9,22 @@ COPY --from=cache /usr/local/lib/node_modules/pnpm/ /usr/local/lib/node_modules/
 COPY --from=cache /opt/rnd-node/ /opt/rnd-node/
 COPY --from=cache /opt/rnd-verifier/ /opt/rnd-verifier/
 COPY --from=cache /app/runtime/combined/pyproject.toml /app/runtime/combined/uv.lock /opt/rnd-runtime/
-ENV UV_PYTHON_INSTALL_DIR=/opt/rnd-python UV_PYTHON_PREFERENCE=only-managed
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Jammy has no python3.12 package. Copying Debian's interpreter would also
+# introduce a newer glibc requirement. uv's standalone build is portable;
+# install it in /opt (not root's private HOME) for the unprivileged verifier.
+ENV UV_PYTHON_INSTALL_DIR=/opt/rnd-python UV_PYTHON_PREFERENCE=only-managed \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt UV_NATIVE_TLS=true
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install -y --no-install-recommends \
         postgresql redis-server ca-certificates libstdc++6 git graphviz fonts-noto-cjk \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && uv python install 3.12 \
-    && uv sync --directory /opt/rnd-runtime --frozen --no-dev --python 3.12 \
+    && uv sync --directory /opt/rnd-runtime --frozen --no-dev --python 3.12 --no-python-downloads \
+    && /opt/rnd-runtime/.venv/bin/python -c 'import ssl,sys; assert sys.version_info[:2] == (3, 12); assert ssl.create_default_context().get_ca_certs()' \
     && ln -s /usr/local/lib/node_modules/pnpm/bin/pnpm.cjs /usr/local/bin/pnpm \
     && useradd --create-home --uid 10001 factory \
     && chown -R factory:factory /opt/rnd-node \
-    && chmod -R a+rX /opt/rnd-runtime /opt/rnd-python /opt/rnd-verifier
-# Keep the official Cube base image's CMD/ENTRYPOINT. The SDK runs the fixed
-# acceptance command with user="factory"; application work never runs as root.
+    && chmod -R a+rX /opt/rnd-python /opt/rnd-runtime /opt/rnd-verifier
+# All downloads happen at image build time; the actual acceptance is offline.
+ENV UV_PYTHON_DOWNLOADS=never
+# SDK acceptance commands use user="factory"; application work is never root.

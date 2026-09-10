@@ -29,8 +29,14 @@ from .validation import verify_product
 class Activities:
     def __init__(self, db: Database, settings: Settings):
         self.db = db
-        self.settings = settings
+        self._settings = settings
+        self.db = db
         self.providers = ProviderService(db, settings)
+
+    @property
+    def settings(self):
+        from factory.tool_settings import ToolSettingsService
+        return ToolSettingsService(self.db, self._settings).effective()
 
     def get(self, run_id: str) -> dict:
         with self.db.session() as session:

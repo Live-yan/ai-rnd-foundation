@@ -28,6 +28,14 @@ def fake_upstream(tmp_path):
               'backend/pyproject.toml':'[project]\nname="test-fixture"\nversion="0.0.0"\nrequires-python=">=3.12"\ndependencies=[]\n',
               'frontend/web/src/router/index.ts':'export const router = {addRoute: (value: unknown) => value};\n',
               'frontend/web/src/router/MenuProcessor.ts':'import type { AppRouteRecord } from "@/types/router";\nexport const builtinFrontendRoutes: AppRouteRecord[] = [];\n',
+              'frontend/web/src/router/route-loader.ts':(
+                  '  private handleFirstLevelLeaf(route: AppRouteRecord): Record<string, any> {\n'
+                  '      redirect: fullMenuPath,\n'
+                  '          path: fullMenuPath.replace(/^\\//, ""),\n'),
+              'frontend/web/src/utils/sys/index.ts':'fetch(`/?_t=${Date.now()}`, { cache: "no-store" })\n',
+              'frontend/web/src/utils/sse/index.ts':(
+                  'export function httpEndpoint(endpoint: string): string {\n'
+                  '  return endpoint.replace(/^ws/, "http");\n}\n'),
               'frontend/web/package.json':'{"name":"test-fixture","version":"0.0.0"}\n'}
     for name,text in values.items():
         path = root / name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text(text)
@@ -37,7 +45,7 @@ def fake_upstream(tmp_path):
 @pytest.fixture
 def platform(db,tmp_path,fake_upstream):
     settings = Settings(_env_file=None,data_dir=tmp_path / 'data',upstream_dir=fake_upstream,
-                        openspec_required=False,diagrams_required=False)
+                        openspec_required=False,diagrams_required=False,allow_legacy_demo=True)
     settings.ensure_paths()
     app = FastAPI()
     def actor(x_actor: str | None = Header(None)):

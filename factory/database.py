@@ -48,6 +48,14 @@ class ProviderProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class ToolSetting(Base):
+    __tablename__ = "rnd_tool_setting"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    ciphertext: Mapped[str] = mapped_column(Text)
+    web_url: Mapped[str] = mapped_column(String(1024), default="")
+
+
 class Run(Base):
     __tablename__ = "rnd_run"
     __table_args__ = (UniqueConstraint("owner_id", "idempotency_key", name="uq_rnd_run_idempotency"),)

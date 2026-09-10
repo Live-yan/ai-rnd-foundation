@@ -7,9 +7,9 @@ x-app: &app
     FACTORY_DATABASE_URL: ${FACTORY_DATABASE_URL:?Run python3 scripts/init_env.py first}
     FACTORY_DATA_DIR: /app/data
     FACTORY_UPSTREAM_DIR: /app/.vendor/FastapiAdmin
-    FACTORY_TEMPORAL_ADDRESS: temporal:7233
-    FACTORY_TEMPORAL_NAMESPACE: default
-    FACTORY_TASK_QUEUE: ai-rnd-v1
+    FACTORY_TEMPORAL_ADDRESS: ${FACTORY_TEMPORAL_ADDRESS:-temporal:7233}
+    FACTORY_TEMPORAL_NAMESPACE: ${FACTORY_TEMPORAL_NAMESPACE:-default}
+    FACTORY_TASK_QUEUE: ${FACTORY_TASK_QUEUE:-ai-rnd-v1}
     ENVIRONMENT: dev
     DATABASE_TYPE: postgres
     DATABASE_HOST: postgres
@@ -41,7 +41,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - postgres-socket:/var/run/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U factory -d factory"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -63,7 +63,10 @@ services:
       - -ceu
       - |
         echo "Synchronizing local PostgreSQL role credentials with .env..."
-        psql -h /var/run/postgresql -U factory -d postgres -v ON_ERROR_STOP=1 -v password="$$POSTGRES_PASSWORD" -c "ALTER ROLE factory WITH PASSWORD :'password';" >/dev/null
+        psql -X -h /var/run/postgresql -U factory -d postgres -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+        \getenv password POSTGRES_PASSWORD
+        ALTER ROLE factory WITH PASSWORD :'password';
+        SQL
         PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U factory -d factory -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null
         echo "PostgreSQL credential sync complete."
     depends_on:
@@ -131,12 +134,37 @@ services:
       migrate: {condition: service_completed_successfully}
       temporal: {condition: service_healthy}
     restart: unless-stopped
+  # Optional local administration databases, separate from FastapiAdmin schemas.
+  # Creates only missing databases. Credentials remain those generated in .env.
+  tools-db-init:
+    profiles: ["ai", "tools"]
+    image: postgres:17-bookworm
+    environment: {PGPASSWORD: "${POSTGRES_PASSWORD}"}
+    command:
+      - sh
+      - -ceu
+      - |
+        psql -X -h postgres -U factory -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+        SELECT 'CREATE DATABASE litellm' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='litellm') \gexec
+        SELECT 'CREATE DATABASE coder' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='coder') \gexec
+        SQL
+    depends_on:
+      postgres-auth-sync: {condition: service_completed_successfully}
+    restart: "no"
   litellm:
     profiles: ["ai"]
     # Mutable stable tag is explicitly recorded; pin a resolved digest after local verification.
     image: ghcr.io/berriai/litellm:main-stable
     command: ["--config", "/app/config.yaml", "--port", "4000"]
-    env_file: .env
+    # Do not send the whole platform .env (JWT/credential key) to a gateway.
+    environment:
+      DATABASE_URL: postgresql://factory:${POSTGRES_PASSWORD}@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Run init_env.py first}
+      STORE_MODEL_IN_DB: "True"
+      UI_USERNAME: ${LITELLM_UI_USERNAME:-admin}
+      UI_PASSWORD: ${LITELLM_UI_PASSWORD:-${LITELLM_MASTER_KEY}}
+    depends_on:
+      tools-db-init: {condition: service_completed_successfully}
     ports: ["127.0.0.1:4000:4000"]
     volumes: ["./integrations/litellm/config.yaml:/app/config.yaml:ro"]
     extra_hosts: ["host.docker.internal:host-gateway"]

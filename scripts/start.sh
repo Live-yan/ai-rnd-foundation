@@ -46,6 +46,7 @@ if [ "$fresh" -eq 1 ]; then
 fi
 
 python3 scripts/init_env.py --repair-data
+python3 scripts/setup_toolchain.py
 docker compose version
 docker compose config --quiet
 docker compose up --build -d

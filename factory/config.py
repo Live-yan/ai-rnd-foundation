@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     temporal_namespace: str = "default"
     task_queue: str = "ai-rnd-v1"
     token: str = ""
+    allow_legacy_demo: bool = False
     credential_encryption_key: str = ""
     # Legacy/default LiteLLM proxy profile. UI-managed provider profiles take precedence.
     model_base_url: str = "http://localhost:4000/v1"
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     cube_api_key: str = ""
     cube_template: str = ""
     coder_url: str = ""
+    coder_browser_url: str = ""
     coder_token: str = ""
     coder_template_id: str = ""
     coder_owner_id: str = ""

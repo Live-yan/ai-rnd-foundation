@@ -24,5 +24,8 @@ def create_app():
     async def actor(auth=Security(AuthPermission(["module_factory:workbench:query"]))) -> str:
         return str(auth.user.id)
 
-    app.include_router(create_router(db, settings, actor, route_class=audit_route, response_factory=SuccessResponse))
+    async def administrator(auth=Security(AuthPermission(["module_factory:workbench:query"]))) -> bool:
+        return bool(auth.user.is_superuser)
+
+    app.include_router(create_router(db, settings, actor, route_class=audit_route, response_factory=SuccessResponse, admin_dependency=administrator))
     return app

@@ -14,6 +14,8 @@ docker build -t ai-rnd-coder:0.2.0 integrations/coder
 
 Docker daemon 是运行工作区容器的那一个，不一定是运行研发平台的机器。镜像必须存在于该 daemon，或推送到它能拉取的私有镜像仓库。部署时将 `workspace_image` 设置为验证后的 image digest。
 
+镜像已提供 Python 3.12、uv、Node 22、npm、pnpm 9.15.3、Git 和源码导入器，以非 root 的 coder 用户运行；不用再依赖通用示例镜像里偶然存在的开发工具。工作区没有 Docker daemon/socket。需要调试产品时按导出包说明连接产品专属 PostgreSQL/Redis（不要复用平台数据库和密钥），然后执行 uv/pnpm 命令；也可把 ZIP 下载到本机用其 Docker Compose 启动。
+
 ## 2. 注册模板
 
 ```bash
@@ -21,7 +23,7 @@ coder login https://你的-coder-服务
 coder templates push ai-rnd-product --directory integrations/coder
 ```
 
-配置 Terraform 变量 `workspace_image` 与 `network_name`。示例网络 `ai-rnd_default` 只适用于同一 Docker daemon 的本地 Compose 安装。远程 Coder 应使用管理员规划的私有网络/HTTPS 路由。
+配置 Terraform 变量 `workspace_image`、`network_name` 和 `coder_agent_url`。示例网络 `ai-rnd_default` 只适用于同一 Docker daemon 的本地 Compose 安装。远程 Coder 应使用管理员规划的私有网络/HTTPS 路由。
 
 模板依赖官方 `coder/coder`、`kreuzwerker/docker` providers 及 code-server module。首次推送需要下载依赖；运行 `terraform init` 后保留本地生成的 `.terraform.lock.hcl`。本仓库不伪造 provider lock 或已解析的镜像 digest。
 
@@ -39,7 +41,7 @@ FACTORY_CODER_IMPORT_TIMEOUT=240
 
 `FACTORY_CODER_FACTORY_URL` 是 **Coder 工作区能访问到的平台服务根地址**。同一私有 Compose 网络可用 `http://api:8000`；远程工作区使用平台实际 HTTPS 地址，可包含 `/api/v1` 前缀。平台会追加 `/factory/transfer/<run-id>`。
 
-**不要填写工作区自身的 localhost。** Coder Agent 还必须能访问 Coder 自己的 access URL；这和能够从浏览器打开 Coder 是两件事。先在相同网络条件的容器内验证 DNS、端口和 TLS。
+**不要填写工作区自身的 localhost。** Coder Agent 使用模板 `coder_agent_url`，同一私有网络默认 `http://coder:7080`；远程环境要填写 Agent 可达的 HTTPS 地址。`CODER_ACCESS_URL` 则是浏览器的公开地址，本机为 `http://localhost:7080`。两者不会再通过字符串替换混用。先在相同网络条件的容器内验证 DNS、端口和 TLS。
 
 ```bash
 docker compose up -d --force-recreate api worker

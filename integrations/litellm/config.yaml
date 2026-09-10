@@ -1,12 +1,7 @@
-# scripts/configure_model.py fills the model name from .env; never pass the gateway master key to the browser.
-model_list:
-  - model_name: factory-planner
-    litellm_params:
-      model: ollama_chat/REPLACE_WITH_AN_INSTALLED_MODEL
-      api_base: http://host.docker.internal:11434
-      timeout: 90
-      max_tokens: 6000
+# Ready for the native Admin UI. No fake or preselected paid model.
+# Add models in /ui, or deliberately replace this file with the reviewed export.
+model_list: []
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 litellm_settings:
-  drop_params: false
+  drop_params: true

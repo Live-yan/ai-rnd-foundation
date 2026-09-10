@@ -1,152 +1,68 @@
-# 从零启动与首次验收
+# 启动、升级和首次验收
 
-## 1. 你拿到的到底是什么
+本项目是需要首次联网构建的 AI 研发平台，不是完全离线包。固定 FastapiAdmin 模板通过 Docker 装配；模型账号与 Cube、MCP、Coder 的真实环境授权由部署者提供。完整配置以 [联调清单](INTEGRATION_ACCEPTANCE.md) 为准。
 
-把这个目录理解为“建造平台的原料和装配说明”。Dockerfile 会下载你指定的真正 FastapiAdmin 固定提交，把新增研发平台代码接到它的应用工厂和 Vue 路由。它没有把一个极简 FastAPI 页面冒充完整 FastapiAdmin，也没有把上游 Agno 聊天功能当成整套软件研发流水线。
+## 已有安装：先保留数据，再更新源码
 
-但是，本包 **不是完全离线包**，本次环境 **没有实际启动 Docker 整栈**。因此请把首次本机验收视为必要步骤。若你要求“下载即离线运行、11 个工具全部已联调、任意需求都生成完整产品”，本包尚未达到这一标准。
+升级前备份 `.env`、PostgreSQL 数据库、`data/` 和 Temporal 开发数据，确认备份能恢复。保留本地配置，不把秘密上传到 Git 或聊天。先执行 `git status`；存在本地修改时先保存，不使用 `reset --hard` 覆盖。
 
-## 2. Windows + AMD 的准备工作
-
-推荐 Windows + WSL2 Ubuntu + Docker Desktop，源码放在 Ubuntu 的 `~/src`，而不是长期从 `/mnt/c` 的 Windows 文件夹运行大量 Linux 构建。AMD 指处理器架构，不代表一定有 GPU，也不代表自动具备 KVM。模型可以放远端；不要求本机显卡。[S13][S14]
-
-第一步，在 Windows 任务管理器的“性能 → CPU”查看虚拟化是否已启用。未启用时按主板说明进入 BIOS 开启 SVM/AMD-V。管理员 PowerShell 执行：
-
-```powershell
-wsl --install -d Ubuntu-24.04
-wsl --update
-wsl --list --verbose
-```
-
-如果 Ubuntu 已经安装，不重复安装，确认 VERSION 一列为 2。首次打开 Ubuntu 会要求设置 Linux 用户名和密码；输入密码时没有星号是正常现象。
-
-第二步，安装 Docker Desktop，选择 WSL2 后端，在 Settings → Resources → WSL Integration 中启用你的 Ubuntu。打开 Ubuntu 终端执行：
+在 PR 分支验证本轮修复：
 
 ```bash
-docker version
-docker compose version
-```
-
-成功时应同时看到 Docker Client 和 Server。只有 Client 而 Server 连接失败，说明 Docker Desktop 未启动或 WSL 集成未启用。不要在同一个 WSL 里盲目再安装另一套 dockerd。
-
-第三步，准备终端工具并解压。把下面 Windows 路径换成你真实下载位置：
-
-```bash
-sudo apt-get update
-sudo apt-get install -y git unzip python3 ca-certificates
-mkdir -p ~/src
-cd ~/src
-unzip /mnt/c/Users/你的Windows用户名/Downloads/AI_RND_Platform_Foundation_0.1.0.zip
-cd ai-rnd-foundation
-ls
-```
-
-应能看见 `Dockerfile`、`compose.yaml`、`factory`、`scripts`、`docs`。终端中的当前目录很重要：后文未特别注明的命令，都在这个项目根目录运行。
-
-你可以在 Windows 安装 VS Code 及 WSL 扩展，在 Ubuntu 根目录执行 `code .` 打开整个项目。先不用理解全部源码。
-
-## 3. 第一次只运行核心流程
-
-暂不安装 Cube、Coder、ToolHive，也不填模型密钥。先验证基础工程，避免 11 个服务同时报错。
-
-```bash
+git fetch origin
+git switch fix/workbench-integration-readiness
+git pull --ff-only origin fix/workbench-integration-readiness
 python3 scripts/doctor.py
 python3 scripts/init_env.py
+python3 scripts/setup_toolchain.py
 docker compose config --quiet
 docker compose up --build -d
-```
-
-`init_env.py` 只在 `.env` 不存在时生成随机 PostgreSQL、Redis 和 JWT 密钥，不覆盖已有配置。`.env` 是本机秘密，不能上传 Git、聊天截图或发给编程 AI。`docker compose config --quiet` 只检查配置；不要把展开的 `docker compose config` 输出公开，因为它包含密码。
-
-也可以用 `bash scripts/start.sh` 执行初始化和启动。这个脚本不是隐藏式安装器，你可以先打开查看内容。
-
-首次构建依次进行：拉取固定上游 → 组装新增 Vue 页面 → pnpm 安装和类型检查 → 前端构建 → uv 解析平台与上游共同依赖 → 安装 → 启动 PostgreSQL、Redis、Temporal → 平台迁移 → API/worker 启动。任一步失败，必须保留并检查失败位置；不能删除类型检查、跳过迁移或改成 demo 后就宣称已修好。
-
-```bash
 docker compose ps -a
-docker compose logs --tail=120 migrate api worker temporal
 ```
 
-`init-data`、`migrate` 正常完成后显示 exited(0) 是正常的，它们是一次性任务。API/worker/PG/Redis/Temporal 应持续运行。健康检查只覆盖对应服务，API health 成功不意味着 worker 已执行任务。
+`init_env.py` 保留已有配置值，只补缺少的兼容设置；`setup_toolchain.py` 只补缺失或空白的本机工具地址，不生成模型 Key、Token、Template ID 或账号。配置若不适合你的远程部署，修改对应地址，不修改业务代码。主机未安装 uv 不阻止 Docker 路径，镜像内已经安装 uv。
 
-## 4. 登录并找到新增研发界面
+不要把 `down -v`、`--fresh` 或 `-Fresh` 当作升级命令；它们会清空当前 Compose 项目的数据库卷。日常停机用 `docker compose stop`。`.env` 改动后使用 `docker compose up -d --force-recreate api worker`，单独 `restart` 不加载新环境变量。
 
-浏览器打开 `http://localhost:8000/web/`。上游当前 README 的本地快速启动说明使用 `admin / 123456`；首次登录后立即改密码，删除不需要的演示用户。原始模板的账号初始化逻辑未在本次环境实际运行，若登录失败查看 API 初始化日志和下载的上游说明，不尝试猜测数据库密码。[S01]
+## 新安装
 
-登录后地址栏输入：
-
-```text
-http://localhost:8000/web/#/factory
-```
-
-这是新增的独立研发页面，默认没有自动写入 FastapiAdmin 菜单数据库。以后可按上游菜单管理方式加一个可见菜单入口。`/web/#/factory` 中 `#` 后面是浏览器路由，不是后端文件路径。
-
-页面使用原来的登录令牌，后端复用 JWT、Redis 会话以及实时用户检查。不要把 `FACTORY_TOKEN` 粘进去；它只用于可选诊断应用，不是主界面的登录凭据。
-
-## 5. 先跑明确标识的 demo
-
-填写项目名称“设备台账演示”，需求填写“建立设备与维修记录管理，验证台账和关联记录”。选择唯一已实现的 `fastapiadmin-pg-v1` 模板；provider 选择 demo，sandbox 选择 static，暂不勾 Serena。
-
-demo 总是生成同一套设备和维修记录结构。它的作用是排除模型差异、验证装配链，不会把你输入的任意软件需求真正实现。页面会展示该限制，必须主动认可才能批准。
-
-点击启动后，状态顺序应为：
-
-```text
-QUEUED → PLANNING → AWAITING_APPROVAL
-       → GENERATING → VERIFYING → PACKAGING → READY
-```
-
-在审批页检查表、字段、引用和未实现项。确认后点击批准；不接受就拒绝，补充需求后新建一个 run。当前不支持直接在审批页编辑 JSON。后补的聊天消息不会修改正在运行任务的需求快照。
-
-READY 表示 **通过本版门禁的源码骨架可下载**，不是生产验收合格。点击下载，保存 ZIP，打开其中的 `delivery/quality.json`。如果状态 FAILED，先看事件和 worker 日志，不重复点几十次创建任务。
-
-## 6. 在干净目录启动下载的产品
-
-把下载 ZIP 解压到一个新目录，不要覆盖平台自身目录。这是“被生成的软件”，与“生成软件的平台”是两个独立项目。
+Windows 使用启用了 WSL 集成的 Docker Desktop，在已有的 Ubuntu 终端操作。`docker version` 必须同时显示 Client 和 Server，`docker compose version` 必须可用。不要为了本项目在已有 Docker Desktop 后端旁边重复安装 dockerd。
 
 ```bash
-cd ~/src/你解压后的产品目录
-python3 scripts/init_product.py
-docker compose config --quiet
-docker compose up --build -d
-docker compose logs --tail=100 app
+mkdir -p ~/src
+cd ~/src
+git clone https://github.com/Live-yan/ai-rnd-foundation.git
+cd ai-rnd-foundation
+git switch fix/workbench-integration-readiness
+bash scripts/start.sh
 ```
 
-产品默认网页 `http://localhost:8010/web/`；登录并改密码后打开 `http://localhost:8010/web/#/business`。先新增一个设备，记住 ID，再新增引用它的维修记录。关联字段目前填写父记录 ID，并非智能下拉选项。
+源码已有时不要重复克隆。主机 Python 用于初始化和诊断，应用 Python 环境由镜像安装。第一次构建会下载固定模板及依赖，不能在断网环境声称全部安装完成。
 
-至少验收：刷新后数据仍在；重启 app 后数据仍在；第二个用户看不到第一个用户的业务记录；跨用户引用被拒绝；有子记录的父记录不能直接删除。不要因为看到了表单就认为数据库或权限已验收。
+## 登录与配置
 
-平台与产品默认端口不同。运行多个产品时，为每个产品修改 Compose 项目名和端口，不能共用同一组数据卷或照抄密码。
+浏览器打开 `http://localhost:8000/api/v1/web/`，按固定 FastapiAdmin 模板的首次登录说明登录并立即修改初始化密码。研发入口为 `http://localhost:8000/api/v1/web/#/factory`；其他两个入口是 `#/factory-providers` 和 `#/factory-toolchain`。它们共用宿主登录和菜单体系，不要把 `FACTORY_TOKEN` 当成网页登录密码或 JWT。
 
-## 7. 让真实需求进入模型
+先到模型供应商页配置自己的供应商、模型 ID 和相应凭据，并执行连接测试。API Key、云平台凭据和 ChatGPT/Codex 订阅授权是不同方式。连接失败时查看失败状态，平台不会静默切换到固定 Demo。自定义地址需在管理员 `.env` 的 `FACTORY_MODEL_ALLOWED_ORIGINS` 白名单中批准，详见联调清单。
 
-只有先跑通上面的固定 demo，才接真实模型。已有 Ollama 时，在其所在机器运行 `ollama list`，复制一个确实已安装、支持聊天并能稳定输出 JSON 的模型名。不要照抄手册中的占位符，也不要凭显存大小假定任意模型都能运行。
+不使用外部沙箱和 IDE 时可先选择**基础模式**验证需求澄清、规格审阅和源码导出；它明确记录跳过的工具，不等同完整产品验收。完整模式必须配置 ToolHive/Serena、Cube 模板、受控 Structurizr 执行和 Coder 自动导入。填写地址只是“配置存在”，不是“已执行成功”。
 
-编辑平台根目录 `.env` 的 `OLLAMA_MODEL`，然后执行：
+输入具体需求 → 回答 AI 的澄清问题 → 确认当前需求版本 → 开始流水线 → 检查真实规格/架构及未支持项 → 批准对应 digest → 验证 → 下载 ZIP。不要未审阅规格就自动批准。
+
+## 故障定位
 
 ```bash
-python3 scripts/configure_model.py
-docker compose --profile ai up -d --force-recreate api worker litellm
-docker compose exec worker python scripts/probe_integrations.py model
+docker compose logs --tail=120 postgres-auth-sync migrate api worker temporal
 ```
 
-脚本为 LiteLLM 生成 `factory-planner` 路由，将平台模型密钥设置为网关 master key。默认网关访问 `http://host.docker.internal:11434` 的 Ollama；本机部署位置和绑定地址不同时需要修改 `integrations/litellm/config.yaml`。不要为了 Docker 连通而把无认证 Ollama 暴露公网。[S09]
+`init-data`、`postgres-auth-sync`、`migrate` 等一次性服务正常结束为 `Exited (0)`；API、worker、数据库、Redis 和 Temporal 应持续运行。API 健康不等于 worker 已经成功执行任务。
 
-探针成功后在网页选择 litellm，输入一个小而具体的需求，例如：“仓库货架管理，货架有名称、区域、启用状态；物品有名称、数量、所属货架，只做台账 CRUD，不做出入库交易。”模型产出的字段应与本次需求一致，不应仍然固定出现维修记录。
+出现大批 `Cannot find name 'ref' / 'computed' / 'ElMessage'` 时，检查是否还在运行旧 Dockerfile。本版先运行 Vite 生成自动导入声明，再执行 `vue-tsc --noEmit`；不删除类型检查，也不手工补几百个全局变量。资源路径为 `/api/v1/web/`，不是早期 `/web/`。
 
-数量约束、唯一编码、库存扣减事务等不属于本版自动完成能力。模型应将未支持项列出；你仍需人工检查它有没有遗漏。模型返回 400、超时或非法 JSON 时会失败，不偷偷切换到 demo。
+已有 PostgreSQL 卷与 `.env` 密码不一致时，启动链会同步本地开发角色密码并用 TCP 校验；不需要删除数据卷。同步失败先核对日志和实际挂载，不修改认证策略为公网 trust。
 
-## 8. 开关服务、记录版本
+## 验收与生成产品
 
-```bash
-# 普通停止，保留数据库：
-docker compose stop
-# 继续：
-docker compose up -d
-# 编辑 .env 后：
-docker compose up -d --force-recreate api worker
-# 成功构建后记录真实依赖：
-bash scripts/capture_locks.sh
-```
+CI 使用一次性服务和明确标识的模型 HTTP 夹具，结果不能替代你的真实账号授权、Cube KVM/模板、MCP 网络和 Coder provisioner 联调。检查应绑定同一 Git 提交，并保留完整报告；失败、跳过、未运行均不能写成通过。
 
-不要把 `restart` 当成重新载入 Compose 环境变量；修改 `.env` 通常需要 recreate。不要把 `down -v` 当成日常停止。升级前备份 `.env`、PostgreSQL、产物目录和 Temporal 开发数据，并实际演练恢复。
+下载的产品解压到全新目录，按其中 README 和启动脚本独立运行，不覆盖平台源码，也不与平台共用数据库卷。用户隔离、关联约束、原生登录与 Redis 会话都应按报告和实际业务再次验收。当前确定性生成器支持类型化 CRUD 和无环父子关联；审批、支付、设备采集等未支持业务不能当成已经实现。
