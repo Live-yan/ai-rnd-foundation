@@ -113,7 +113,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
         return _response(request, export_config(providers.list(actor)))
 
     @core.post("/providers/{provider_id}/oauth/{action}")
-    async def subscription_auth(request: Request, provider_id: str, action: Literal["begin", "poll", "disconnect"], actor: str = Depends(actor_dependency)):
+    async def subscription_auth(request: Request, provider_id: str, action: Literal["begin", "restart", "poll", "disconnect"], actor: str = Depends(actor_dependency)):
         result = await run_in_threadpool(oauth.operation, actor, provider_id, action)
         return _response(request, result)
 

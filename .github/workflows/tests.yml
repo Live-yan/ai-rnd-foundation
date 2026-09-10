@@ -160,7 +160,7 @@ jobs:
         run: |
           docker builder prune -af
           python3 scripts/setup_toolchain.py
-          docker compose -f compose.yaml -f compose.tools.yaml --profile ai --profile tools up -d litellm coder
+          docker compose -f compose.yaml -f compose.tools.yaml --profile ai --profile tools --profile architecture up -d litellm coder structurizr
           python3 scripts/check_tool_consoles.py --workspace-network ai-rnd_default
       - uses: actions/upload-artifact@v4
         if: always()
@@ -195,7 +195,7 @@ jobs:
           retention-days: 7
       - name: Remove this job's disposable stack
         if: always()
-        run: docker compose -f compose.yaml -f compose.ci.yaml -f compose.tools.yaml --profile ai --profile tools down --volumes --remove-orphans
+        run: docker compose -f compose.yaml -f compose.ci.yaml -f compose.tools.yaml --profile ai --profile tools --profile architecture down --volumes --remove-orphans
 
   coder-template:
     runs-on: ubuntu-latest

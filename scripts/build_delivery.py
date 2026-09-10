@@ -72,7 +72,7 @@ def validate(root: Path, commit: str) -> dict:
         report = load(root, "integration-image-reports/" + name + ".json")
         require(report.get("status") == "passed" and report.get("exit_code") == 0 and not report.get("timeout"), "Image check failed: " + name)
     consoles = load(root, "tool-console-readiness/readiness.json")
-    require(all(consoles.get(key) == "reachable" for key in ("coder", "litellm", "coder_workspace_network")), "Tool console/network check missing")
+    require(all(consoles.get(key) == "reachable" for key in ("coder", "litellm", "litellm_ui", "structurizr", "coder_workspace_network")), "Tool console/network check missing")
     require((root / "coder-template-lock/.terraform.lock.hcl").is_file(), "Validated Coder dependency lock missing")
     for name in ("host.uv.lock", "host.pyproject.toml"):
         require((root / "integration-image-reports" / name).is_file() and (root / "integration-image-reports" / name).stat().st_size > 0, "Tested host dependency lock is missing")

@@ -37,7 +37,7 @@ def evidence(tmp_path):
     write('c4-parser-contract/parser.json', [dict(case=case, exit_code=0) for case in ('english', 'chinese', 'special')])
     for name in ('coder-build', 'coder-runtime', 'cube-build', 'cube-runtime', 'cube-acceptance'):
         write('integration-image-reports/' + name + '.json', dict(status='passed', exit_code=0, timeout=False))
-    write('tool-console-readiness/readiness.json', {key: 'reachable' for key in ('coder', 'litellm', 'coder_workspace_network')})
+    write('tool-console-readiness/readiness.json', {key: 'reachable' for key in ('coder', 'litellm', 'litellm_ui', 'structurizr', 'coder_workspace_network')})
     write('coder-template-lock/.terraform.lock.hcl', '# unit fixture, not a provider lock')
     write('integration-image-reports/host.uv.lock', '# test dependency lock')
     write('integration-image-reports/host.pyproject.toml', '# test dependency manifest')
@@ -73,6 +73,8 @@ def test_stale_commit_is_rejected(evidence):
     ('integration-image-reports/cube-build.json', {'exit_code': 1}),
     ('integration-image-reports/cube-runtime.json', {'timeout': True}),
     ('tool-console-readiness/readiness.json', {'coder_workspace_network': 'not_run'}),
+    ('tool-console-readiness/readiness.json', {'litellm_ui': 'not_run'}),
+    ('tool-console-readiness/readiness.json', {'structurizr': 'not_run'}),
 ])
 def test_partial_evidence_is_rejected(evidence, name, change):
     path = evidence / name

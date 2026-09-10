@@ -13,6 +13,9 @@ const query = ref(""); const category = ref(""); const busy = ref(false); const 
 const editing = ref<ProviderProfile>(); const discovering = ref(false); const discovered = ref<ProviderCatalogModel[]>([]);
 const output = ref(""); const exportNote = ref(""); const exportVisible = ref(false);
 const authVisible = ref(false); const authProfile = ref<ProviderProfile>(); const auth = ref<OAuthStatus>(); const authBusy = ref(false);
+const authError = ref("");
+const officialLoginUrl = "https://auth.openai.com/codex/device";
+function openOfficialLogin() { openService(officialLoginUrl); }
 let authEpoch = 0;
 let discoveryEpoch = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -43,13 +46,16 @@ async function discover() {
   try { const result = editing.value && !form.api_key && editing.value.base_url === form.base_url ? await FactoryAPI.discoverSavedProvider(editing.value.id) : await FactoryAPI.discoverProviderModels({provider: form.provider, base_url: form.base_url, api_key: form.api_key}); if(epoch !== discoveryEpoch || !editor.value) return; discovered.value = result.models; ElMessage.success(`发现 ${result.models.length} 个模型`); } catch(e) { error(e); } finally { discovering.value = false; }
 }
 async function save() {
+  // Open during the click, before any await: browsers block asynchronous popups.
+  const authorize = form.provider === "chatgpt" && editing.value?.auth_status !== "connected";
+  if (authorize) openOfficialLogin();
   busy.value = true;
   try {
     const body: ProviderInput = {...form, name: form.name.trim(), model: form.model.trim(), litellm_params: Object.fromEntries(Object.entries(opts.value).filter(([,v]) => v !== null && v !== undefined && v !== "")), credentials: Object.fromEntries(Object.entries(creds.value).filter(([,v]) => Boolean(v)))};
     if (editing.value && !body.api_key) delete body.api_key;
     const saved = editing.value ? await FactoryAPI.updateProvider(editing.value.id, body) : await FactoryAPI.createProvider(body);
     editor.value = false; await refresh(); ElMessage.success("LiteLLM 配置已保存并用于后续模型调用");
-    if (saved.provider === "chatgpt" && saved.auth_status !== "connected") await login(saved);
+    if (authorize) await login(saved, false, false);
   } catch(e) { error(e); } finally { busy.value = false; }
 }
 async function test(item: ProviderProfile) { busy.value = true; try { const result = await FactoryAPI.testProvider(item.id); if(!result.ok) throw Error("模型未返回成功确认"); ElMessage.success(result.message); } catch(e) { error(e); } finally { busy.value = false; } }
@@ -71,11 +77,33 @@ async function pollAuth(id: string, epoch = authEpoch) {
   try { const value = await FactoryAPI.oauthAction(id, "poll"); if (epoch !== authEpoch || !authVisible.value || authProfile.value?.id !== id) return; auth.value = value;
     if(value.status === "connected") { await refresh(); ElMessage.success("账号授权完成，可以选择订阅模型测试"); return; }
     if(value.status === "pending") timer = setTimeout(() => void pollAuth(id, epoch), Math.max(5,value.interval) * 1000);
-  } catch(e) { error(e); }
+  } catch(e: any) {
+    if(epoch === authEpoch && authVisible.value) authError.value = e?.response?.data?.msg || e?.response?.data?.detail || "授权检查失败，请检查网络后重试；不需要重复登录。";
+  }
 }
-async function login(item: ProviderProfile, restart = false) {
-  stopAuth(); const epoch = authEpoch; authProfile.value = item; auth.value = undefined; authVisible.value = true; authBusy.value = true;
-  try { let value = await FactoryAPI.oauthStatus(item.id); if(epoch !== authEpoch || !authVisible.value) return; if(restart || !["pending", "connected"].includes(value.status)) value = await FactoryAPI.oauthAction(item.id, "begin"); if(epoch !== authEpoch || authProfile.value?.id !== item.id || !authVisible.value) return; auth.value = value; if(value.status === "pending") timer = setTimeout(() => void pollAuth(item.id, epoch), value.interval * 1000); } catch(e) { error(e); } finally { if(epoch === authEpoch) authBusy.value = false; }
+async function login(item: ProviderProfile, restart = false, launchBrowser = true) {
+  if (launchBrowser) openOfficialLogin();
+  stopAuth(); const epoch = authEpoch; authProfile.value = item; auth.value = undefined; authError.value = ""; authVisible.value = true; authBusy.value = true;
+  try {
+    let value = await FactoryAPI.oauthStatus(item.id);
+    if(epoch !== authEpoch || !authVisible.value) return;
+    if(restart || !["pending", "connected"].includes(value.status)) value = await FactoryAPI.oauthAction(item.id, restart ? "restart" : "begin");
+    if(epoch !== authEpoch || authProfile.value?.id !== item.id || !authVisible.value) return;
+    auth.value = value;
+    if(value.status === "pending") timer = setTimeout(() => void pollAuth(item.id, epoch), Math.max(5, value.interval) * 1000);
+  } catch(e: any) {
+    if(epoch === authEpoch && authVisible.value) authError.value = e?.response?.data?.msg || e?.response?.data?.detail || "获取设备码失败，请检查网络及账号设备授权设置后重试。";
+  } finally { if(epoch === authEpoch) authBusy.value = false; }
+}
+async function retryAuth() {
+  if (!authProfile.value) return;
+  authError.value = "";
+  if (auth.value?.status === "pending") { if(timer) clearTimeout(timer); await pollAuth(authProfile.value.id); }
+  else await login(authProfile.value, false, false);
+}
+async function copyCode() {
+  try { await navigator.clipboard.writeText(auth.value?.user_code || ""); ElMessage.success("设备码已复制，请仅粘贴到 OpenAI 官方页面"); }
+  catch { ElMessage.warning("无法自动复制，请手动选择上方设备码"); }
 }
 watch(editor, open => { if(!open) { ++discoveryEpoch; form.api_key = ""; form.credentials = {}; } });
 watch(authVisible, open => { if(!open) { stopAuth(); auth.value = undefined; } });
@@ -99,7 +127,7 @@ onDeactivated(() => { stopAuth(); authVisible.value = false; editor.value = fals
       <template v-if="form.provider === 'vertex_ai'"><el-form-item label="Vertex Project"><el-input v-model="opts.vertex_project" /></el-form-item><el-form-item label="Vertex Location"><el-input v-model="opts.vertex_location" placeholder="us-central1" /></el-form-item><el-form-item class="wide" label="Service Account JSON（留空保留已保存凭据）"><el-input v-model="creds.vertex_credentials" type="password" show-password autocomplete="new-password" placeholder="完整 service_account JSON，不接受文件路径" /></el-form-item></template>
       <el-form-item label="Temperature"><el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" :disabled="form.provider === 'chatgpt'" /></el-form-item><el-form-item label="Max Tokens"><el-input-number v-model="form.max_tokens" :min="256" :max="128000" :step="256" :disabled="form.provider === 'chatgpt'" /></el-form-item><div class="wide rnd-actions"><el-checkbox v-model="form.enabled">启用</el-checkbox><el-checkbox v-model="form.is_default" :disabled="!form.enabled">设为默认</el-checkbox></div></div>
       <el-collapse style="margin-top:14px"><el-collapse-item title="高级 LiteLLM 参数" name="params"><div class="rnd-editor-grid"><el-form-item label="Timeout（秒）"><el-input-number v-model="opts.timeout" :min="10" :max="180" /></el-form-item><el-form-item label="Num Retries"><el-input-number v-model="opts.num_retries" :min="0" :max="2" /></el-form-item><el-form-item label="Top P"><el-input-number v-model="opts.top_p" :min="0" :max="1" :step="0.1" /></el-form-item><el-form-item label="Reasoning Effort"><el-select v-model="opts.reasoning_effort" clearable><el-option v-for="v in ['none','minimal','low','medium','high','xhigh']" :key="v" :value="v" :label="v" /></el-select></el-form-item><el-form-item label="Frequency Penalty"><el-input-number v-model="opts.frequency_penalty" :min="-2" :max="2" :step="0.1" /></el-form-item><el-form-item label="Presence Penalty"><el-input-number v-model="opts.presence_penalty" :min="-2" :max="2" :step="0.1" /></el-form-item><el-form-item label="Seed"><el-input-number v-model="opts.seed" :min="0" :max="2147483647" /></el-form-item><el-form-item label="Organization"><el-input v-model="opts.organization" /></el-form-item><el-checkbox class="wide" v-model="opts.drop_params">Drop Params：忽略供应商不支持的可选参数</el-checkbox></div><p class="rnd-muted">平台的 JSON 输出与验收校验不会关闭。账号订阅通道不支持的 token 上限等参数不发送。</p></el-collapse-item></el-collapse></el-form><template #footer><div class="rnd-actions"><el-button @click="editor = false">取消</el-button><el-button type="primary" :loading="busy" :disabled="!form.name.trim() || !form.model.trim()" @click="save">保存{{ form.provider === 'chatgpt' ? '并授权' : '' }}</el-button></div></template></el-drawer>
-    <el-dialog v-model="authVisible" title="ChatGPT / Codex 官方账号授权" width="min(520px, 94vw)" append-to-body class="rnd-form"><div v-loading="authBusy"><el-alert title="仅在 auth.openai.com 输入设备码，不在本平台输入账号密码" type="info" :closable="false" /><p>配置：{{ authProfile?.name }} · {{ auth?.status || '获取授权信息…' }}</p><template v-if="auth?.user_code"><div class="device-code">{{ auth.user_code }}</div><el-button type="primary" @click="openService(auth!.verification_url!)">打开官方登录页面</el-button><p class="rnd-muted">在新窗口登录并输入上方设备码；返回后自动检查。设备授权可能需要在账号安全设置中启用。</p></template><el-result v-if="auth?.status === 'connected'" icon="success" title="账号已连接" sub-title="可以关闭此窗口，测试你有权限使用的模型" /><el-button v-if="auth?.status === 'expired' && authProfile" @click="login(authProfile, true)">重新获取设备码</el-button></div></el-dialog>
+    <el-dialog v-model="authVisible" title="ChatGPT / Codex 官方账号授权" width="min(520px, 94vw)" append-to-body class="rnd-form"><div v-loading="authBusy"><el-alert title="仅在 auth.openai.com 输入设备码，不在本平台输入账号密码" type="info" :closable="false" /><p>配置：{{ authProfile?.name }} · {{ auth?.status || '获取授权信息…' }}</p><template v-if="auth?.user_code"><div class="device-code">{{ auth.user_code }}</div><div class="rnd-actions"><el-button type="primary" @click="openOfficialLogin">打开官方登录页面</el-button><el-button @click="copyCode">复制设备码</el-button></div><p class="rnd-muted">已尝试打开官方页面；若被浏览器拦截，请点击上方按钮。登录后输入此设备码并确认授权，返回后自动检查。设备授权可能需要在 ChatGPT 设置 → 安全中启用。</p></template><el-alert v-if="authError" :title="authError" type="error" :closable="false" /><el-button v-if="authError" @click="retryAuth">重试授权检查</el-button><el-result v-if="auth?.status === 'connected'" icon="success" title="账号已连接" sub-title="可以关闭此窗口，测试你有权限使用的模型" /><el-button v-if="auth?.status === 'expired' && authProfile" @click="login(authProfile, true)">重新获取设备码</el-button></div></el-dialog>
     <el-drawer v-model="exportVisible" title="LiteLLM Proxy 配置（不含明文凭据）" size="min(780px, 100vw)" append-to-body class="rnd-form"><el-alert :title="exportNote" type="info" :closable="false" /><pre>{{ output }}</pre><template #footer><el-button type="primary" @click="downloadYaml">下载 config.yaml</el-button></template></el-drawer>
   </div>
 </template>

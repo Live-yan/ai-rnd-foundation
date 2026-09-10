@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     credential_encryption_key: str = ""
     # Legacy/default LiteLLM proxy profile. UI-managed provider profiles take precedence.
     model_base_url: str = "http://localhost:4000/v1"
+    litellm_proxy_url: str = "http://litellm:4000"
+    structurizr_url: str = "http://structurizr:8080"
     model_api_key: str = ""
     model_name: str = "factory-planner"
     # Custom endpoints require an administrator-approved origin; paths remain configurable in the UI.

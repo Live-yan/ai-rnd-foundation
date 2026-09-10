@@ -11,9 +11,21 @@ from .config import Settings
 
 async def probe(tool: str, settings: Settings) -> dict:
     try:
-        if tool in {"fastapiadmin", "langgraph", "litellm", "diagrams", "openspec", "structurizr"}:
-            modules = {"langgraph": "langgraph", "litellm": "litellm", "diagrams": "diagrams"}
-            commands = {"openspec": "openspec", "diagrams": "dot", "structurizr": "docker"}
+        if tool in {"litellm", "structurizr"}:
+            url = settings.litellm_proxy_url if tool == "litellm" else settings.structurizr_url
+            if not url:
+                raise RuntimeError("Console URL missing")
+            path = "/health/liveliness" if tool == "litellm" else "/"
+            async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+                response = await client.get(url.rstrip("/") + path)
+                # Structurizr Local redirects its root to the workspace view.
+                allowed = {200, 302, 307} if tool == "structurizr" else {200}
+                if response.status_code not in allowed:
+                    raise RuntimeError("Console unavailable")
+            return {"status": "reachable", "message": "控制台服务 HTTP 检查通过；浏览器入口需从你的浏览器可达。模型账号或 C4 解析回执仍需单独验证。"}
+        if tool in {"fastapiadmin", "langgraph", "diagrams", "openspec"}:
+            modules = {"langgraph": "langgraph", "diagrams": "diagrams"}
+            commands = {"openspec": "openspec", "diagrams": "dot"}
             if tool in modules and importlib.util.find_spec(modules[tool]) is None:
                 raise RuntimeError("Package missing")
             if tool == "fastapiadmin" and not settings.upstream_dir.joinpath("LICENSE").is_file():

@@ -24,6 +24,15 @@ TOOL_DESCRIPTIONS = [
 ]
 
 
+# Browser consoles are distinct from in-process packages and external APIs.
+TOOL_ACCESS = {
+    "fastapiadmin": "console", "temporal": "console", "litellm": "console",
+    "structurizr": "console", "coder": "console",
+    "langgraph": "embedded", "openspec": "embedded", "diagrams": "embedded",
+    "toolhive": "external", "serena": "external", "cube": "external",
+}
+
+
 def _module(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
@@ -59,7 +68,7 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
     for key, name, role in TOOL_DESCRIPTIONS:
         result.append({
             "id": key, "name": name, "role": role, "configured": configured[key],
-            "execution": execution[key], "hint": hints.get(key, ""),
+            "execution": execution[key], "hint": hints.get(key, ""), "access": TOOL_ACCESS[key],
         })
     return result
 

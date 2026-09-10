@@ -61,7 +61,10 @@ class OAuthService:
                 config.pop("oauth_pending", None)
                 config["oauth_status"] = "expired"
                 pending = {}
-            if action == "begin" and not pending:
+            if action == "restart":
+                pending = {}
+                config = {k: v for k, v in config.items() if not k.startswith("oauth_")}
+            if action in {"begin", "restart"} and not pending:
                 # Validate encryption configuration BEFORE issuing external authorization.
                 encrypt_secret("encryption-check", self.settings)
                 reply = isolated_job({"operation": "begin"})["pending"]

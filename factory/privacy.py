@@ -72,6 +72,7 @@ def secure_host_logging() -> None:
 def metadata_only_route(
     upstream: type[APIRoute], writer: Callable, client_ip: Callable,
     methods: Collection[str],
+    auth_exception: type[Exception] | None = None,
 ) -> type[APIRoute]:
     """Specialize OperationLogRoute using its record schema and database writer.
 
@@ -92,9 +93,18 @@ def metadata_only_route(
                     # All domain HTTP exceptions use fixed, credential-free descriptions.
                     message = exc.detail if isinstance(exc.detail, str) else "请求未通过业务校验"
                     response = failure(request, exc.status_code, message, exc.headers)
-                except Exception:
-                    # No str(exc), logger.exception or chained traceback: SDK errors can carry secrets.
-                    response = failure(request, 500, "操作未完成，请检查服务状态；敏感错误详情未写入日志")
+                except Exception as exc:
+                    # Preserve the host's authentication status without logging its payload.
+                    # Missing-token CustomException defaults to 500 in the pinned host.
+                    status = getattr(exc, "status_code", 500)
+                    if auth_exception and isinstance(exc, auth_exception) and (
+                        status in {401, 403} or not request.headers.get("authorization")
+                    ):
+                        status = 403 if status == 403 else 401
+                        response = failure(request, status, "登录已失效，请重新登录" if status == 401 else "无权执行此操作")
+                    else:
+                        # No str(exc), logger.exception or chained traceback: SDK errors can carry secrets.
+                        response = failure(request, 500, "操作未完成，请检查服务状态；敏感错误详情未写入日志")
                 if request.method in methods:
                     ctx = getattr(request.state, "ctx", None)
                     record = {
