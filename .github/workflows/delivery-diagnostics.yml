@@ -1,0 +1,40 @@
+name: Delivery build diagnostics
+on:
+  push:
+    branches: [fix/workbench-integration-readiness]
+    paths: [.github/workflows/delivery-diagnostics.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  previous-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read the failed image build from this repository only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run view 34405899587 --repo Live-yan/ai-rnd-foundation --job 102649062635 --log > "$RUNNER_TEMP/previous-job.log"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          lines = Path(os.environ['RUNNER_TEMP'], 'previous-job.log').read_text().splitlines()
+          # Export only dependency/image build output, never platform environment,
+          # runtime data, authorization headers or application diagnostics.
+          selected = [line for line in lines if '\tBuild distributable Coder and Cube verifier images\t' in line]
+          assert selected, 'Image-build section missing from job log'
+          text = '\n'.join(selected[-100:]) + '\n'
+          out = Path('build-diagnostics')
+          out.mkdir()
+          (out / 'image-build-tail.txt').write_text(text)
+          print(text)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: failed-image-build-diagnostics
+          path: build-diagnostics/
+          retention-days: 7
