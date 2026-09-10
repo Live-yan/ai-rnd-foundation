@@ -14,17 +14,18 @@ from sqlalchemy.exc import IntegrityError
 
 from .config import Settings
 from .database import Database, ToolSetting
+from .toolchain import TOOL_ACCESS
 from .providers.registry import decrypt_secret, encrypt_secret
 
 # Field tuples: settings key, label, input type. DB values override .env until reset.
 TOOLS = {
     "fastapiadmin": ("https://fastapiadmin.com", "/api/v1/web/#/", [], "认证、权限与系统参数使用宿主管理页面；框架版本由模板 manifest 固定。"),
     "langgraph": ("https://docs.langchain.com/oss/python/langgraph/overview", "", [("model_timeout", "模型调用总超时（秒）", "number"), ("model_max_tokens", "默认最大输出 tokens", "number")], "进程内需求分析图；模型由模型配置页选择，无需另起 LangGraph 服务。"),
-    "litellm": ("https://docs.litellm.ai/docs/", "http://localhost:4000/ui", [], "模型、凭据及 litellm_params 在模型配置页保存；全局网关预算/路由策略可进入 LiteLLM 原生管理台。"),
+    "litellm": ("https://docs.litellm.ai/docs/", "http://localhost:4000/ui", [("litellm_proxy_url", "LiteLLM Proxy API（服务器可达）", "url")], "模型、凭据及 litellm_params 在模型配置页保存；全局网关预算/路由策略可进入 LiteLLM 原生管理台。"),
     "temporal": ("https://docs.temporal.io", "http://localhost:8233", [], "已预配 Compose Temporal。address/namespace/task_queue 属于 worker 启动参数，修改 .env 后重新创建 API/worker 容器；请先处理未完成任务。"),
     "openspec": ("https://github.com/Fission-AI/OpenSpec", "", [("openspec_required", "强制规格校验", "boolean")], "CLI 已装入镜像；完整模式始终要求验证回执。无需服务 URL。"),
     "diagrams": ("https://diagrams.mingrammer.com", "", [("diagrams_required", "强制生成部署图", "boolean")], "diagrams、Graphviz、字体由镜像预装。图文件可在运行详情预览。"),
-    "structurizr": ("https://docs.structurizr.com", "http://localhost:8080", [("docker_host_data_dir", "Docker 宿主 data 绝对路径", "text")], "Compose architecture profile 提供浏览器；解析仍用固定镜像。worker 的 Docker socket 是高权限部署选项，不能由页面开启。"),
+    "structurizr": ("https://docs.structurizr.com", "http://localhost:8080", [("structurizr_url", "Structurizr 查看服务（服务器可达）", "url"), ("docker_host_data_dir", "Docker 宿主 data 绝对路径", "text")], "Compose architecture profile 提供浏览器；解析仍用固定镜像。worker 的 Docker socket 是高权限部署选项，不能由页面开启。"),
     "toolhive": ("https://docs.stacklok.com/toolhive", "", [], "ToolHive 代理进程由管理员部署；MCP 地址和令牌统一在 Serena 项目中配置，避免两份配置漂移。"),
     "serena": ("https://github.com/oraios/serena", "", [("serena_url", "ToolHive 管理的 Serena MCP URL", "url"), ("serena_token", "MCP Bearer Token", "secret")], "先运行 integrations/toolhive/prepare.sh 与 start.sh；容器访问宿主 loopback 的方式需按本机网络确认。"),
     "cube": ("https://github.com/TencentCloud/CubeSandbox", "", [("cube_api_url", "Cube API URL", "url"), ("cube_api_key", "Cube API Key", "secret"), ("cube_template", "全栈验收模板 ID", "text")], "需要真实 Cube 服务及带 envd 的全栈模板，不能自动在普通容器里创建 KVM。参见 integrations/cube/Dockerfile.fullstack。"),
@@ -77,6 +78,8 @@ class ToolSettingsService:
         if tool not in TOOLS:
             raise HTTPException(404, "Unknown integration")
         docs, web, fields, note = TOOLS[tool]
+        if tool == "coder" and self.defaults.coder_browser_url:
+            web = self.defaults.coder_browser_url
         # One SELECT: values and revision must be from the same DB snapshot.
         # Reading them separately lets a stale value acquire a newer revision.
         with self.db.session() as session:
@@ -96,7 +99,17 @@ class ToolSettingsService:
                            "value": ("" if kind == "secret" else value) if editable else None,
                            "configured": bool(value), "minimum": LIMITS.get(key, (None,None))[0],
                            "maximum": LIMITS.get(key, (None,None))[1]})
+        command = ""
+        if tool in {"litellm", "coder", "structurizr"}:
+            profile = {"litellm": "ai", "coder": "tools", "structurizr": "architecture"}[tool]
+            command = f"docker compose -f compose.yaml -f compose.tools.yaml --profile {profile} up -d {tool}"
+        access_note = {
+            "console": "独立浏览器控制台；必须先部署服务。连接检查不代表账号、模板和任务验收通过。",
+            "embedded": "内置库 / CLI，没有独立网页登录后台。在工作台运行详情查看其产物，或打开官方文档。",
+            "external": "外部 API / MCP 服务，不自带本平台管理后台。需真实端点与授权；不能把 API 地址当作网页打开。",
+        }[TOOL_ACCESS[tool]]
         return {"id": tool, "docs": docs, "web_url": web, "note": note, "fields": result,
+                "access": TOOL_ACCESS[tool], "access_note": access_note, "start_command": command,
                 "revision": version, "editable": editable, "requires_restart": tool == "temporal",
                 "startup_values": {"temporal_address": settings.temporal_address, "temporal_namespace": settings.temporal_namespace,
                                    "task_queue": settings.task_queue} if tool == "temporal" and editable else {}}

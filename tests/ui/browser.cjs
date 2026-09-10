@@ -33,9 +33,31 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
     await page.locator('[data-testid="provider-select"]').click();await page.getByRole('option',{name:'Anthropic',exact:true}).click();
     assert.equal(await page.locator('input[data-testid="api-key"], [data-testid="api-key"] input').inputValue(),'');
     await page.getByRole('button',{name:'取消',exact:true}).click();
-    await page.locator('.provider-row').nth(1).getByRole('button',{name:'网页登录'}).click();
+    // Stub only the external site; exercise real window.open under a user click.
+    await page.context().route('https://auth.openai.com/**', route => route.fulfill({contentType:'text/html',body:'<h1>Official authorization fixture (no account)</h1>'}));
+    async function clickLogin() {
+      const opened=page.context().waitForEvent('page');
+      await page.locator('.provider-row').nth(1).getByRole('button',{name:'网页登录'}).click();
+      const popup=await opened; await popup.waitForLoadState();
+      assert.equal(popup.url(),'https://auth.openai.com/codex/device');
+      assert.equal(await popup.evaluate(()=>window.opener),null,'Official site must not access the workbench');
+      await popup.close();
+    }
+    await clickLogin();
     await page.locator('.el-dialog__headerbtn').last().click();await page.waitForTimeout(1500);
     assert.deepEqual(await page.evaluate(()=>window.__calls),[], 'Closing login must prevent delayed authorization creation');
+    await clickLogin();
+    await page.getByText('TEST-ONLY',{exact:true}).waitFor();
+    assert.deepEqual(await page.evaluate(()=>window.__calls),['oauth:begin']);
+    await page.getByRole('button',{name:'复制设备码',exact:true}).waitFor();
+    await page.locator('.el-dialog__headerbtn').last().click();
+    await page.evaluate(()=>{window.__authFail=true;});
+    await clickLogin();
+    await page.getByRole('button',{name:'重试授权检查',exact:true}).waitFor();
+    await page.evaluate(()=>{window.__authFail=false;});
+    await page.getByRole('button',{name:'重试授权检查',exact:true}).click();
+    await page.getByText('TEST-ONLY',{exact:true}).waitFor();
+    await page.locator('.el-dialog__headerbtn').last().click();
     await page.goto('http://127.0.0.1:4173/#/factory-toolchain');
     for(let i=0;i<11;i++){await page.locator('.tool-card').nth(i).getByRole('button').click();await page.getByRole('button',{name:'保存配置',exact:true}).waitFor();await page.locator('.el-drawer__close-btn').last().click();}
     const cube=page.locator('.tool-card').filter({has:page.locator('strong',{hasText:/^cube$/})});
@@ -62,7 +84,7 @@ const {chromium}=require('playwright');const fs=require('fs');const assert=requi
     await page.locator('.tool-card').filter({has:page.locator('strong',{hasText:/^coder$/})}).getByRole('button').click();
     await page.waitForTimeout(1200);
     assert.equal(await page.getByText('迟到探针:cube',{exact:true}).count(),0,'Late probe must not overwrite another integration');
-    fs.writeFileSync('ui-reports/layout.json' ,JSON.stringify({scope:'actual_components_with_API_fixtures',receipts,credential_switch:'passed',closed_authorization:'passed',configuration_drawers:11,reset_confirmation_and_revision:'passed',stale_probe:'passed'},null,2));
+    fs.writeFileSync('ui-reports/layout.json' ,JSON.stringify({scope:'actual_components_with_API_fixtures',receipts,credential_switch:'passed',closed_authorization:'passed',official_login_popup:'passed',authorization_retry:'passed',configuration_drawers:11,reset_confirmation_and_revision:'passed',stale_probe:'passed'},null,2));
   }catch(error){
     if(currentPage && !currentPage.isClosed()) {
       await currentPage.screenshot({path:'ui-reports/failure.png',fullPage:true}).catch(()=>{});

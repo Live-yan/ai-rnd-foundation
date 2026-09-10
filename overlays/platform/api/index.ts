@@ -103,6 +103,7 @@ export interface ToolchainItem {
   configured: boolean;
   execution: string;
   hint: string;
+  access?: "console" | "embedded" | "external";
 }
 export interface RunEvent {
   id: number;
@@ -146,6 +147,7 @@ export interface OAuthStatus {
 export interface IntegrationConfig {
   id: string; docs: string; web_url: string; note: string; revision: number; editable: boolean;
   requires_restart: boolean; startup_values: Record<string, any>;
+  access?: "console" | "embedded" | "external"; access_note?: string; start_command?: string;
   fields: { key: string; label: string; kind: string; value: any; configured: boolean; minimum?: number; maximum?: number }[];
 }
 
@@ -156,7 +158,7 @@ function data<T>(response: any): T {
 export const FactoryAPI = {
   async exportProviders() { return data<{yaml: string; environment_variables: string[]; note: string}>(await request({ url: `${API_PATH}/providers/export`, method: "post" })); },
   async oauthStatus(id: string) { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth`, method: "get" })); },
-  async oauthAction(id: string, action: "begin" | "poll" | "disconnect") { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth/${action}`, method: "post", timeout: 60000 })); },
+  async oauthAction(id: string, action: "begin" | "restart" | "poll" | "disconnect") { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth/${action}`, method: "post", timeout: 60000 })); },
   async discoverSavedProvider(id: string) { return data<{models: ProviderCatalogModel[]}>(await request({ url: `${API_PATH}/providers/${id}/discover`, method: "post", timeout: 60000 })); },
   async integrationConfig(id: string) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "get" })); },
   async saveIntegration(id: string, revision: number, values: Record<string, any>) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "put", data: {expected_revision: revision, values} })); },

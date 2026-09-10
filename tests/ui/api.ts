@@ -1,5 +1,5 @@
 // Deterministic API fixtures; the actual Vue workbench components are rendered.
-const tools = ["fastapiadmin","langgraph","litellm","temporal","openspec","diagrams","structurizr","toolhive","serena","cube","coder"].map(id => ({id,name:id,role:"研发阶段中的真实职责与独立配置入口",execution:"full",configured:!['cube','coder','serena'].includes(id)}));
+const tools = ["fastapiadmin","langgraph","litellm","temporal","openspec","diagrams","structurizr","toolhive","serena","cube","coder"].map(id => ({id,name:id,role:"研发阶段中的真实职责与独立配置入口",execution:"full",access:['langgraph','openspec','diagrams'].includes(id)?'embedded':['toolhive','serena','cube'].includes(id)?'external':'console',configured:!['cube','coder','serena'].includes(id)}));
 const catalog = [
   {id:"openai",name:"OpenAI",requires_api_key:true}, {id:"anthropic",name:"Anthropic",requires_api_key:true},
   {id:"chatgpt",name:"ChatGPT / Codex",requires_api_key:false}, {id:"bedrock",name:"Bedrock",requires_api_key:false}
@@ -25,7 +25,7 @@ const api={
  },
  async probeIntegration(id:string){await new Promise(r=>setTimeout(r,900)); return {status:"requires_run",message:"迟到探针:"+id};},
  async oauthStatus(){await new Promise(r=>setTimeout(r,900));return {status:"not_connected",interval:5};},
- async oauthAction(id:string,action:string){(window as any).__calls.push("oauth:"+action);return {status:"pending",user_code:"TEST-ONLY",verification_url:"https://auth.openai.com/codex/device",interval:5};},
+ async oauthAction(id:string,action:string){(window as any).__calls.push("oauth:"+action);if((window as any).__authFail) throw new Error("fixture unavailable");return {status:"pending",user_code:"TEST-ONLY",verification_url:"https://auth.openai.com/codex/device",interval:5};},
  async exportProviders(){return {yaml:"model_list: []",note:"不含凭据",environment_variables:[]};}
 };
 export default api;
