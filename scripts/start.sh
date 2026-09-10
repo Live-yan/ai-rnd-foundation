@@ -4,13 +4,19 @@ cd "$(dirname "$0")/.."
 
 fresh=0
 new_env=0
+tools=0
 for arg in "$@"; do
   case "$arg" in
     --fresh) fresh=1 ;;
     --new-env) new_env=1 ;;
+    --tools) tools=1 ;;
     -h|--help)
       cat <<'EOF'
-Usage: ./scripts/start.sh [--fresh [--new-env]]
+Usage: ./scripts/start.sh [--tools] [--fresh [--new-env]]
+
+--tools:
+  Start a prepared ToolHive/Serena plus LiteLLM, Structurizr MCP/UI and Coder.
+  No Docker socket or Cube resources are provisioned.
 
 Default:
   Preserve .env, host data/, PostgreSQL, Redis and Temporal volumes.
@@ -48,7 +54,12 @@ fi
 python3 scripts/init_env.py --repair-data
 python3 scripts/setup_toolchain.py
 docker compose version
-docker compose config --quiet
-docker compose up --build -d
+set -- docker compose
+if [ "$tools" -eq 1 ]; then
+  bash integrations/toolhive/start.sh
+  set -- "$@" -f compose.yaml -f compose.tools.yaml --profile ai --profile tools --profile architecture
+fi
+"$@" config --quiet
+"$@" up --build -d
 printf '\nOpen http://localhost:8000/api/v1/web/ and log in, then /api/v1/web/#/factory\n'
 printf 'See docs/START_HERE.md for first-login and diagnosis instructions.\n'

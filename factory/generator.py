@@ -77,8 +77,11 @@ def _generate_product(spec: ProjectSpec, upstream: Path, destination: Path,
             put(stage, 'backend/' + name, (ROOT / 'overlays/product' / name).read_text())
         for name in ['compose.yaml', 'Dockerfile.delivery']:
             put(stage, name, (ROOT / 'overlays/product' / name).read_text())
-        for name in ['init_product.py','start_product.sh','run_local.py']:
+        for name in ['init_product.py','start_product.sh','run_local.py', 'launch.ps1']:
             put(stage, 'scripts/' + name, (ROOT / 'overlays/product' / name).read_text())
+        for source, name in [('start.cmd', '启动.cmd'), ('start.command', '启动.command')]:
+            put(stage, name, (ROOT / 'overlays/product' / source).read_text(encoding='utf-8'))
+        (stage / '启动.command').chmod(0o755)
         put(stage, 'scripts/verify_source.py', (ROOT / 'scripts/verify_source.py').read_text())
         put(stage, 'scripts/verify_business.py', (ROOT / 'scripts/verify_business.py').read_text())
         put(stage, '.dockerignore', '.git\n.venv\n**/.venv\n**/node_modules\n**/__pycache__\n.env\nbackend/env/.env.dev\nbackend/env/.env.prod\n')
@@ -158,23 +161,27 @@ def readme(spec: ProjectSpec) -> str:
 
 ## 一、最简单的启动方式
 
-在解压后的目录打开终端（Windows 建议 WSL Ubuntu）。安装 Docker Desktop 并启用 WSL 集成。
+安装并打开 Docker Desktop，将源码包完整解压到一个新目录。
+Windows 双击 `启动.cmd`；macOS / Linux 运行 `sh 启动.command`（有执行权限时可直接打开）。
+启动器会生成本机配置、构建前后端、等待服务健康并打开浏览器；不需要另外安装 Python、Node 或数据库。
+首次需要联网下载镜像和依赖。再次启动保留密码和数据；每个解压项目使用独立数据卷和自动分配端口。
 
 ```bash
 python3 scripts/init_product.py
-docker compose up --build -d
+docker compose up --build -d --wait
+docker compose port app 8000
 docker compose logs -f app
 ```
 
-浏览器打开 http://localhost:8010/api/v1/web/，按上游 README 的初始化账号说明登录，立刻修改初始密码。
-然后从左侧菜单进入“业务管理”，或直接访问 http://localhost:8010/api/v1/web/#/business 。不要把此本地开发配置暴露到公网。
-端口冲突时修改 compose.yaml 中左侧的 8010；数据库 55433、Redis 56380 也可能需要修改。
+启动器会显示并打开实际地址；该固定模板的初始账号为 `admin`，初始密码为 `123456`，登录后立即修改。
+然后从左侧菜单进入“业务管理”。不要把此本地开发配置暴露到公网。
+需要固定端口时修改 `.env` 的 PRODUCT_PORT；0 表示自动分配。用 `docker compose port app 8000` 查看实际端口。
 第一次构建需要下载上游锁定依赖和镜像，源码在 ZIP 中但依赖不是离线内置的。
 
 ## 二、在 VS Code 中开发
 
 1. 打开整个解压目录；在 WSL 终端执行 `code .`。
-2. 执行 `python3 scripts/init_product.py`；执行 `docker compose up -d postgres redis`。
+2. 执行 `python3 scripts/init_product.py`；本机开发先将 `.env` 中 PRODUCT_POSTGRES_PORT 改为 55433、PRODUCT_REDIS_PORT 改为 56380，再执行 `docker compose up -d postgres redis`。
 3. 执行 `cd backend && uv sync && cd ..`。
 4. 构建前端：`cd frontend/web && corepack pnpm install --frozen-lockfile`（没有锁文件时用 `pnpm install`），
    将 `.env.production.example` 复制为 `.env.production`，补充 `VITE_BASE_URL=/api/v1/web/` 和 `VITE_APP_BASE_API=/api/v1`，

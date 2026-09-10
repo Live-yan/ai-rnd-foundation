@@ -2,6 +2,8 @@
 
 本页针对 `fix/workbench-integration-readiness`。旧手册中的固定 Demo、Structurizr 8081 和“Cube 只检查源码”等说明不适用于新版完整模式。最终验收状态以当前提交的 Actions 和报告为准，不能用旧提交的绿色状态代替。
 
+本机已配置连接与实测结果见 [LOCAL_CONNECTIONS.md](LOCAL_CONNECTIONS.md)。该记录区分 MCP/模型实际调用、核心流水线与尚未完成的 Cube/Coder 完整交付。
+
 ## 1. 更新而不破坏数据
 
 先备份数据库、`.env` 和 `data/` 到仓库外。不要执行 `down -v`。从仓库根目录，在 WSL/Linux 执行：
@@ -39,10 +41,12 @@ FACTORY_MODEL_ALLOWED_ORIGINS=["http://litellm:4000","http://host.docker.interna
 ### 独立 LiteLLM Proxy
 
 ```bash
-docker compose --profile ai up -d litellm
+docker compose -f compose.yaml -f compose.tools.yaml --profile ai up -d structurizr-mcp litellm
 ```
 
 管理页 `http://localhost:4000/ui`，默认用户名 admin；密码取 `LITELLM_UI_PASSWORD`，未配置时取你本地生成的 `LITELLM_MASTER_KEY`。不要公开这些值。Proxy 使用单独的 litellm 数据库，并不会接收整份平台 `.env`。
+
+`integrations/litellm/config.yaml` 同时注册 Serena（经主机 ToolHive）和官方 Structurizr MCP。客户端使用 `http://litellm:4000/serena/mcp`、`http://litellm:4000/structurizr/mcp`；必须给独立虚拟密钥授权 `/v1/mcp/server` 返回的 server ID，不能把 master key 配给普通客户端。模型密钥与 MCP 密钥分开授权。没有原生 MCP 的库/CLI 保持原有调用方式。
 
 平台 profile 与 Proxy 数据库是两套明确的配置：平台直接 SDK 调用无须 Proxy；需要网关预算、路由、负载分配、虚拟密钥时在原生 Proxy UI 设置，并在平台添加 LiteLLM Proxy profile。导出的 YAML 只含环境变量引用，不含真实密钥，不会自动覆盖/重启现有网关。个人订阅 profile 被排除，不能变为所有用户共用的授权账号。
 
@@ -55,7 +59,7 @@ docker compose --profile ai up -d litellm
 | Temporal | Compose 服务、Outbox、审批 signal | 默认即可；修改地址/命名空间/队列后重新创建 API/worker；不要在有未完成任务时切换 |
 | OpenSpec | 固定 CLI，proposal/design/tasks/specs，strict 校验 | 镜像内置；完整模式必须有校验回执 |
 | diagrams | Graphviz、部署 SVG、可编辑 Python 源 | 镜像内置；实际输出在规格审阅抽屉 |
-| Structurizr/C4 | 生成 DSL，固定镜像解析与查看服务 | 启用 architecture profile；完整解析按下文配置受控 Docker runner |
+| Structurizr/C4 | 生成 DSL、官方 MCP 解析与查看服务 | 优先经 LiteLLM 调用 MCP，无需 worker Docker socket；architecture profile 提供查看页 |
 | ToolHive/Serena | 管理代理的部署脚本，固定模板只读符号访问 | 部署真实 MCP，填 worker 可达地址与必要令牌，执行读取探针 |
 | Cube | 官方基座全栈验收镜像配方、SDK 生命周期适配 | 部署 KVM/控制面，导入模板，填 URL/Key/Template ID |
 | Coder | 可启动服务、Terraform 模板、源码 ZIP 自动导入 | 初始化账号/模板/provisioner，填 token、模板和 owner |
@@ -100,7 +104,9 @@ docker compose --profile architecture up -d structurizr
 
 浏览器地址是 `http://localhost:8080`。查看根目录的 architecture 不等于某次 Run 的 DSL 已解析；Run 产物在平台审阅抽屉。
 
-完整运行的 parser 需要 `FACTORY_DOCKER_HOST_DATA_DIR` 为实际 Linux/WSL 宿主 `data` 绝对路径。固定镜像通过显式 Java 入口和绝对 DSL 路径执行，避免镜像默认目录覆盖文件参数。可信本机可启用：
+推荐配置 `FACTORY_STRUCTURIZR_MCP_URL=http://litellm:4000/structurizr/mcp` 和 `FACTORY_STRUCTURIZR_MCP_TOKEN`（仅授权相应 MCP 的虚拟密钥）。解析每次生成的 DSL，只有返回 `OK` 才通过；错误文本即使 MCP `isError=false` 也会判失败。官方 MCP 独立运行于 internal 网络，不发布主机端口、不挂源码或 Docker socket。
+
+仅当未配置 MCP、选择旧 Docker runner 时，parser 才需要 `FACTORY_DOCKER_HOST_DATA_DIR` 为实际 Linux/WSL 宿主 `data` 绝对路径。固定镜像通过显式 Java 入口和绝对 DSL 路径执行，避免镜像默认目录覆盖文件参数。可信本机可启用：
 
 ```bash
 docker compose -f compose.yaml -f compose.sandbox.yaml up -d --force-recreate worker

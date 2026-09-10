@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+from datetime import datetime, timezone
 from typing import Callable, Literal
 from starlette.concurrency import run_in_threadpool
 from factory.tool_settings import ToolSettingsService, ToolSettingsInput
@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select, text
 
-from factory.config import ROOT, Settings
+from factory.config import Settings
 from factory.database import Database, Run
 from factory.providers.catalog import catalog_payload
 from factory.providers.registry import ProviderService
@@ -32,7 +32,8 @@ from .schema import (
 from .service import WorkbenchService
 from factory.security import file_sha256
 from factory.handoff import verify_source_ticket
-from factory.toolchain import require_full_toolchain, toolchain_status
+from factory.toolchain import toolchain_status, RETIRED_TOOLS
+from factory.templates import list_templates
 
 
 def _legacy(request: Request) -> bool:
@@ -51,6 +52,10 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     is_admin = admin_dependency or (lambda: False)
 
     def _success(data=None, msg: str = "操作成功", status_code: int = 200):
+        # Preserve UTC offsets before the host's display formatter strips them.
+        data = jsonable_encoder(data, custom_encoder={
+            datetime: lambda d: (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).isoformat(),
+        })
         if response_factory is not None:
             response = response_factory(data=data, msg=msg, status_code=status_code)
             response.headers["Cache-Control"] = "no-store"
@@ -70,7 +75,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     @core.get("/templates")
     def templates(request: Request, actor: str = Depends(actor_dependency)):
-        data = [json.loads((ROOT / "templates/fastapiadmin/manifest.json").read_text(encoding="utf-8"))]
+        data = list_templates()
         return _response(request, data, "模板列表获取成功")
 
     @core.get("/integrations")
@@ -84,11 +89,15 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
     def toolchain(request: Request, actor: str = Depends(actor_dependency)):
         return _response(request, toolchain_status(config_service.effective(), sum(1 for item in providers.list(actor) if item["enabled"])), "工具链状态获取成功")
 
-    @core.get("/toolchain/{tool}/config")
+    def active_tool(tool: str):
+        if tool in RETIRED_TOOLS:
+            raise HTTPException(410, "该工具已从工作台移除；历史配置保留，不再提供配置或探测入口")
+
+    @core.get("/toolchain/{tool}/config", dependencies=[Depends(active_tool)])
     def tool_config(request: Request, tool: str, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
         return _response(request, config_service.describe(tool, editable=admin))
 
-    @core.post("/toolchain/{tool}/probe")
+    @core.post("/toolchain/{tool}/probe", dependencies=[Depends(active_tool)])
     async def test_integration(request: Request, tool: str, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
         if not admin:
             raise HTTPException(403, "Administrator required")
@@ -96,13 +105,13 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
         from factory.tool_probe import probe
         return _response(request, await probe(tool, config_service.effective()))
 
-    @core.put("/toolchain/{tool}/config")
+    @core.put("/toolchain/{tool}/config", dependencies=[Depends(active_tool)])
     def save_tool_config(request: Request, tool: str, value: ToolSettingsInput, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
         if not admin:
             raise HTTPException(403, "只有系统管理员可以修改全局工具配置")
         return _response(request, config_service.save(tool, value), "已保存；后续 API/活动读取新配置，外部服务部署仍需独立完成")
 
-    @core.delete("/toolchain/{tool}/config")
+    @core.delete("/toolchain/{tool}/config", dependencies=[Depends(active_tool)])
     def reset_tool_config(request: Request, tool: str, revision: int, actor: str = Depends(actor_dependency), admin: bool = Depends(is_admin)):
         if not admin:
             raise HTTPException(403, "Administrator required")
@@ -113,7 +122,7 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
         return _response(request, export_config(providers.list(actor)))
 
     @core.post("/providers/{provider_id}/oauth/{action}")
-    async def subscription_auth(request: Request, provider_id: str, action: Literal["begin", "poll", "disconnect"], actor: str = Depends(actor_dependency)):
+    async def subscription_auth(request: Request, provider_id: str, action: Literal["begin", "restart", "poll", "disconnect"], actor: str = Depends(actor_dependency)):
         result = await run_in_threadpool(oauth.operation, actor, provider_id, action)
         return _response(request, result)
 
@@ -185,6 +194,8 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
 
     @core.post("/projects/{project_id}/runs", status_code=202)
     def run(request: Request, project_id: str, value: RunInput, actor: str = Depends(actor_dependency)):
+        if value.sandbox == "cube" or value.provision_coder or value.pipeline_mode == "full":
+            raise HTTPException(422, "CubeSandbox / Coder 已移除；新任务请使用 core 模式、static 或 docker 检查，并关闭 provision_coder")
         standard = not _legacy(request)
         if standard and not value.expected_revision:
             raise HTTPException(428, "请提交当前项目 expected_revision；刷新需求分析后再启动")
@@ -199,23 +210,20 @@ def create_router(db: Database, settings: Settings, actor_dependency: Callable, 
             profile = providers.runtime(actor, None)
             value = value.model_copy(update={"provider": "litellm", "provider_id": profile.id})
         active_settings = config_service.effective()
-        if value.use_serena and not active_settings.serena_url:
+        selected = repo.get_project(actor, project_id)['template_id']
+        java = selected == 'yudao-cloud-mini-antd-v1'
+        if java and value.validation_level != 'runtime':
+            raise HTTPException(422, '芋道模板需要选择 Docker 实际运行验收')
+        if value.use_serena and not java and not active_settings.serena_url:
             raise HTTPException(422, "Configure the scoped ToolHive/Serena MCP endpoint first")
-        if value.sandbox == "cube" and not all([active_settings.cube_api_url, active_settings.cube_api_key, active_settings.cube_template]):
-            raise HTTPException(422, "Cube API URL, key, and verified template are all required")
-        if value.sandbox == "docker" and not active_settings.docker_host_data_dir:
+        if value.validation_level == 'runtime' and not java and not active_settings.runtime_verifier_image:
+            raise HTTPException(422, "请先准备运行验收镜像，或明确选择仅源码检查")
+        if value.sandbox == "docker" and value.validation_level != 'runtime' and not active_settings.docker_host_data_dir:
             raise HTTPException(422, "Configure Docker host-side data path and the sandbox override compose file")
-        if not settings.upstream_dir.joinpath("LICENSE").exists():
+        if java and not all((active_settings.yudao_upstream_dir / part / 'LICENSE').is_file() for part in ('backend', 'frontend')):
+            raise HTTPException(503, '芋道模板源码未准备，请维护者执行 scripts/bootstrap_yudao.py 并挂载已锁定源码')
+        if not java and not settings.upstream_dir.joinpath("LICENSE").exists():
             raise HTTPException(503, "Upstream template is missing; run scripts/bootstrap.py")
-        if value.pipeline_mode == "full":
-            if value.provider == "demo":
-                raise HTTPException(422, "完整工具链不支持固定 Demo；必须先完成真实 AI 需求澄清")
-            if value.sandbox != "cube" or not value.use_serena or not value.provision_coder:
-                raise HTTPException(422, "完整模式固定启用 ToolHive/Serena、CubeSandbox 和 Coder；部分执行请切换到基础模式")
-            try:
-                require_full_toolchain(active_settings, owner=actor, provider_count=sum(1 for item in providers.list(actor) if item["enabled"]), sandbox=value.sandbox, provision_coder=value.provision_coder)
-            except ValueError as exc:
-                raise HTTPException(422, str(exc)) from exc
         return _response(request, repo.create_run(actor, project_id, value), "研发流水线已提交 Temporal")
 
     @core.get("/projects/{project_id}/runs")

@@ -12,3 +12,6 @@ runtime/
 *.zip
 AI_RND_Platform_Handbook.pdf
 AI_RND_Platform_Handbook.md
+# Structurizr Local generated state (the editable source remains workspace.dsl).
+architecture/.structurizr/
+architecture/workspace.json

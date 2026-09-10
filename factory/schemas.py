@@ -7,9 +7,10 @@ import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-RESERVED = {"id", "owner_id", "created_at", "updated_at", "metadata", "schema", "type", "user"}
+RESERVED = {"id", "owner_id", "tenant_id", "created_at", "updated_at", "metadata", "schema", "type", "user"}
 # Keep in sync with factory.providers.catalog.PROVIDER_CATALOG ids.
 ProviderKind = Literal[
     "chatgpt", "openai", "anthropic", "azure_openai", "google", "deepseek", "groq",
@@ -76,9 +77,11 @@ class EntitySpec(StrictModel):
 
     @model_validator(mode="after")
     def unique_fields(self) -> "EntitySpec":
-        names = [f.name for f in self.fields]
-        if len(names) != len(set(names)):
-            raise ValueError("Duplicate field names")
+        seen = {}
+        for index, field in enumerate(self.fields):
+            if field.name in seen:
+                raise PydanticCustomError("duplicate_field", "Duplicate field names at indices {first} and {duplicate}", {"first": seen[field.name], "duplicate": index})
+            seen[field.name] = index
         return self
 
 
@@ -91,30 +94,33 @@ class ProjectSpec(StrictModel):
 
     @model_validator(mode="after")
     def references_and_cycles(self) -> "ProjectSpec":
-        names = [e.name for e in self.entities]
-        if len(names) != len(set(names)):
-            raise ValueError("Duplicate entity names")
-        edges: dict[str, set[str]] = {n: set() for n in names}
-        for entity in self.entities:
-            for field in entity.fields:
+        indices = {}
+        for index, entity in enumerate(self.entities):
+            if entity.name in indices:
+                raise PydanticCustomError("duplicate_entity", "Duplicate entity names at indices {first} and {duplicate}", {"first": indices[entity.name], "duplicate": index})
+            indices[entity.name] = index
+        edges: dict[str, list[str]] = {name: [] for name in indices}
+        for index, entity in enumerate(self.entities):
+            for field_index, field in enumerate(entity.fields):
                 if field.kind == "reference":
                     if field.references not in edges:
-                        raise ValueError(f"Unknown reference target: {field.references}")
-                    edges[entity.name].add(field.references)
-        visiting: set[str] = set()
+                        raise PydanticCustomError("unknown_reference", "Unknown reference target at entities[{entity}].fields[{field}].references", {"entity": index, "field": field_index})
+                    edges[entity.name].append(field.references)
+        visiting: list[str] = []
         visited: set[str] = set()
 
         def visit(n: str) -> None:
             if n in visiting:
-                raise ValueError("v0.2 supports acyclic parent/child relationships only")
+                cycle = [indices[node] for node in visiting[visiting.index(n):] + [n]]
+                raise PydanticCustomError("reference_cycle", "References must be acyclic; cycle entity indices: {cycle}", {"cycle": cycle})
             if n in visited:
                 return
-            visiting.add(n)
+            visiting.append(n)
             for target in edges[n]:
                 visit(target)
-            visiting.remove(n)
+            visiting.pop()
             visited.add(n)
-        for name in names:
+        for name in indices:
             visit(name)
         return self
 
@@ -193,7 +199,7 @@ class ProviderInput(StrictModel):
     is_default: bool = False
     api_version: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9.\-]*$")
     temperature: float = Field(default=0.1, ge=0, le=2)
-    max_tokens: int = Field(default=6000, ge=256, le=128000)
+    max_tokens: int = Field(default=6000, ge=1, strict=True)
 
 
 class ProviderUpdate(StrictModel):
@@ -208,7 +214,7 @@ class ProviderUpdate(StrictModel):
     is_default: bool | None = None
     api_version: str | None = Field(default=None, max_length=80, pattern=r"^[A-Za-z0-9.\-]*$")
     temperature: float | None = Field(default=None, ge=0, le=2)
-    max_tokens: int | None = Field(default=None, ge=256, le=128000)
+    max_tokens: int | None = Field(default=None, ge=1, strict=True)
 
 
 class DiscoverInput(StrictModel):
@@ -221,10 +227,26 @@ class ClarifyInput(StrictModel):
     provider_id: str | None = Field(default=None, max_length=36)
 
 
+class QuestionChoice(StrictModel):
+    question: str = Field(min_length=1, max_length=4000)
+    options: list[str] = Field(min_length=1, max_length=6)
+    recommended: str = Field(min_length=1, max_length=4000)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def recommendation_is_an_option(self) -> "QuestionChoice":
+        if any(not option.strip() or len(option) > 4000 for option in self.options):
+            raise ValueError("Options must be nonempty and at most 4000 characters")
+        if len(set(self.options)) != len(self.options) or self.recommended not in self.options:
+            raise ValueError("Options must be unique and include the recommendation")
+        return self
+
+
 class ClarificationResult(StrictModel):
     ready: bool
     understanding: str = Field(min_length=1, max_length=4000)
     questions: list[str] = Field(default_factory=list, max_length=12)
+    question_choices: list[QuestionChoice] = Field(default_factory=list, max_length=12)
     assumptions: list[str] = Field(default_factory=list, max_length=20)
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=30)
     risks: list[str] = Field(default_factory=list, max_length=20)
@@ -232,6 +254,9 @@ class ClarificationResult(StrictModel):
 
     @model_validator(mode="after")
     def ready_is_actionable(self) -> "ClarificationResult":
+        choice_questions = [choice.question for choice in self.question_choices]
+        if len(set(choice_questions)) != len(choice_questions) or any(q not in self.questions for q in choice_questions):
+            raise ValueError("Question choices must refer to distinct current questions")
         if self.ready and self.questions:
             raise ValueError("A ready clarification cannot contain unanswered blocking questions")
         if self.ready and not self.acceptance_criteria:
@@ -251,8 +276,16 @@ class RunInput(StrictModel):
     use_serena: bool = False
     sandbox: Literal["static", "docker", "cube"] = "static"
     pipeline_mode: PipelineMode = "core"
+    validation_level: Literal["source", "runtime"] = "source"
     provision_coder: bool = False
     idempotency_key: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+    @model_validator(mode="after")
+    def runtime_requires_docker(self) -> "RunInput":
+        if self.validation_level == "runtime" and (self.sandbox != "docker" or self.pipeline_mode != "core"):
+            raise ValueError("运行验收需要 Docker 沙箱和 core 流水线")
+        return self
 
 
 class ApprovalInput(StrictModel):

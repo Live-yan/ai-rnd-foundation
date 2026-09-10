@@ -9,6 +9,7 @@ def create_app():
     # scripts/bootstrap.py assembles an unmodified pinned upstream plus additive Vue/entrypoint overlays.
     from app import create_app as create_upstream_app
     from app.core.dependencies import AuthPermission
+    from app.core.exceptions import CustomException
     from app.common.response import SuccessResponse
     from app.core.router_class import OperationLogRoute, _write_operation_log_async
     from app.utils.ip_local_util import get_client_ip
@@ -19,7 +20,7 @@ def create_app():
     db = Database(settings.database_url)
     app = create_upstream_app()
     secure_host_logging()
-    audit_route = metadata_only_route(OperationLogRoute, _write_operation_log_async, get_client_ip, host_settings.OPERATION_RECORD_METHOD)
+    audit_route = metadata_only_route(OperationLogRoute, _write_operation_log_async, get_client_ip, host_settings.OPERATION_RECORD_METHOD, auth_exception=CustomException)
 
     async def actor(auth=Security(AuthPermission(["module_factory:workbench:query"]))) -> str:
         return str(auth.user.id)

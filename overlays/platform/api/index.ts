@@ -3,10 +3,17 @@ import { request } from "@utils";
 const API_PATH = "/factory";
 
 export type ClarificationStatus = "NEEDS_CLARIFICATION" | "WAITING_USER" | "READY";
+export interface QuestionChoice {
+  question: string;
+  options: string[];
+  recommended: string;
+  reason: string;
+}
 export interface Clarification {
   ready: boolean;
   understanding: string;
   questions: string[];
+  question_choices?: QuestionChoice[];
   assumptions: string[];
   acceptance_criteria: string[];
   risks: string[];
@@ -19,6 +26,13 @@ export interface FactoryMessage {
   questions?: string[];
   acceptance_criteria?: string[];
   risks?: string[];
+}
+export interface FactoryTemplate {
+  id: string; name: string; description?: string; suitable_for?: string[] | string; example_requirement?: string;
+  available?: boolean; status?: string; reason?: string;
+}
+export interface FactoryTemplate {
+  id: string; name: string; description?: string; suitable_for?: string[] | string; example_requirement?: string; available?: boolean; status?: string; reason?: string;
 }
 export interface FactoryProject {
   revision: string;
@@ -103,6 +117,7 @@ export interface ToolchainItem {
   configured: boolean;
   execution: string;
   hint: string;
+  access?: "console" | "embedded" | "external";
 }
 export interface RunEvent {
   id: number;
@@ -146,7 +161,8 @@ export interface OAuthStatus {
 export interface IntegrationConfig {
   id: string; docs: string; web_url: string; note: string; revision: number; editable: boolean;
   requires_restart: boolean; startup_values: Record<string, any>;
-  fields: { key: string; label: string; kind: string; value: any; configured: boolean; minimum?: number; maximum?: number }[];
+  access?: "console" | "embedded" | "external"; access_note?: string; start_command?: string;
+  fields: { key: string; label: string; kind: string; value: any; configured: boolean; minimum?: number | null; maximum?: number | null }[];
 }
 
 function data<T>(response: any): T {
@@ -156,7 +172,7 @@ function data<T>(response: any): T {
 export const FactoryAPI = {
   async exportProviders() { return data<{yaml: string; environment_variables: string[]; note: string}>(await request({ url: `${API_PATH}/providers/export`, method: "post" })); },
   async oauthStatus(id: string) { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth`, method: "get" })); },
-  async oauthAction(id: string, action: "begin" | "poll" | "disconnect") { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth/${action}`, method: "post", timeout: 60000 })); },
+  async oauthAction(id: string, action: "begin" | "restart" | "poll" | "disconnect") { return data<OAuthStatus>(await request({ url: `${API_PATH}/providers/${id}/oauth/${action}`, method: "post", timeout: 60000 })); },
   async discoverSavedProvider(id: string) { return data<{models: ProviderCatalogModel[]}>(await request({ url: `${API_PATH}/providers/${id}/discover`, method: "post", timeout: 60000 })); },
   async integrationConfig(id: string) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "get" })); },
   async saveIntegration(id: string, revision: number, values: Record<string, any>) { return data<IntegrationConfig>(await request({ url: `${API_PATH}/toolchain/${id}/config`, method: "put", data: {expected_revision: revision, values} })); },
@@ -164,6 +180,9 @@ export const FactoryAPI = {
   async probeIntegration(id: string) { return data<{status: string; message: string}>(await request({ url: `${API_PATH}/toolchain/${id}/probe`, method: "post", timeout: 60000 })); },
   async health() {
     return data<Record<string, any>>(await request({ url: `${API_PATH}/health`, method: "get" }));
+  },
+  async listTemplates() {
+    return data<FactoryTemplate[]>(await request({ url: `${API_PATH}/templates`, method: "get" }));
   },
   async listProjects() {
     return data<FactoryProject[]>(await request({ url: `${API_PATH}/projects`, method: "get" }));

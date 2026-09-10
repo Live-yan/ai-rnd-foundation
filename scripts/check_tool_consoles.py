@@ -32,6 +32,8 @@ def main() -> None:
         for name, url in {
             'coder': 'http://127.0.0.1:7080/api/v2/buildinfo',
             'litellm': 'http://127.0.0.1:4000/health/liveliness',
+            'litellm_ui': 'http://127.0.0.1:4000/ui/',
+            'structurizr': 'http://127.0.0.1:8080/',
         }.items():
             wait_for(name, url)
             receipt[name] = 'reachable'

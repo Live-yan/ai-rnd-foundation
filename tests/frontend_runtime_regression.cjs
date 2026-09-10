@@ -11,7 +11,8 @@ const root = process.argv[2];
 if (!root) throw new Error('Expected assembled frontend/web directory');
 
 function loadDeclaration(relative, name, bindings = {}) {
-  const source = fs.readFileSync(path.join(root, relative), 'utf8');
+  const file = fs.readFileSync(path.join(root, relative), 'utf8');
+  const source = relative.endsWith('.vue') ? file.match(/<script setup lang="ts">([\s\S]*?)<\/script>/)[1] : file;
   const ast = ts.createSourceFile(relative, source, ts.ScriptTarget.Latest, true);
   const declaration = ast.statements.find(node => node.name?.text === name);
   assert.ok(declaration, `Missing ${name}`);
@@ -91,6 +92,74 @@ async function main() {
   assert.equal(httpEndpoint('ws://localhost:8000'), 'http://localhost:8000');
   assert.equal(httpEndpoint('wss://factory.example'), 'https://factory.example');
   assert.equal(httpEndpoint('https://other.example'), 'https://other.example');
-  console.log('PASS: standalone/shell navigation, single rendered Layout, route cleanup, SSE and polling base');
+  const consoleFile = 'src/views/factory/FactoryConsole.vue';
+  const answers = { value: '' };
+  let sent = 0;
+  const questionAnswers = { value: { 'Who can read?': 'Company-wide', 'Who can delete?': 'Managers' } };
+  const submitQuestions = loadDeclaration(consoleFile, 'submitQuestions', {
+    questions: { value: ['Who can read?', 'Who can delete?'] }, questionAnswers,
+    answer: answers, sendAnswer: async () => { sent++; },
+  });
+  await submitQuestions();
+  assert.equal(sent, 1);
+  assert.ok(answers.value.includes('Company-wide') && answers.value.includes('Managers'));
+  questionAnswers.value['Who can delete?'] = '';
+  await submitQuestions();
+  assert.equal(sent, 1, 'Incomplete plan answers must not be submitted');
+  const recommendationsReady = { value: true };
+  const useRecommendations = loadDeclaration(consoleFile, 'useRecommendations', {
+    questions: { value: ['Who can read?', 'Who can delete?'] }, questionAnswers,
+    questionChoices: { value: new Map([
+      ['Who can read?', { recommended: 'Company-wide' }],
+      ['Who can delete?', { recommended: 'Managers' }],
+    ]) }, allRecommended: recommendationsReady, busy: { value: false },
+  });
+  useRecommendations();
+  assert.equal(questionAnswers.value['Who can delete?'], 'Managers');
+  assert.equal(sent, 1, 'Recommendations must not auto-submit answers');
+  recommendationsReady.value = false;
+  questionAnswers.value['Who can delete?'] = 'Custom answer';
+  useRecommendations();
+  assert.equal(questionAnswers.value['Who can delete?'], 'Custom answer');
+  const startRun = loadDeclaration(consoleFile, 'startRun', {
+    project: { value: { id: 'test' } }, clarificationReady: { value: true }, providerId: { value: 'model' },
+    runActive: { value: true }, busy: { value: false },
+    guarded: () => { throw new Error('Must not start a duplicate active run'); },
+  });
+  await startRun();
+  const labels = loadDeclaration(consoleFile, 'deliveryLabel');
+  assert.match(labels({quality_level: 'scaffold_ready'}), /源码检查/);
+  assert.match(labels({quality_level: 'generated_crud_stack_verified', full_stack: 'passed'}), /通过运行验收/);
+  assert.doesNotMatch(labels({quality_level: 'generated_crud_stack_verified', full_stack: 'not_run'}), /通过运行验收/);
+  let submitted;
+  const requestRun = loadDeclaration(consoleFile, 'startRun', {
+    project: {value: {id: 'selected', revision: 'revision'}}, clarificationReady: {value: true},
+    providerId: {value: 'luna'}, runActive: {value: false}, busy: {value: false}, operation: {value: ''},
+    guarded: fn => fn(), run: {value: null}, runs: {value: []}, events: {value: []},
+    validationLevel: {value: 'runtime'}, sandbox: {value: 'static'}, useSerena: {value: false},
+    crypto: {randomUUID: () => 'request-id'}, FactoryAPI: {
+      startRun: async (id, body) => {submitted = {id, ...body}; return {id: 'run'};}, listRuns: async () => [],
+    },
+  });
+  await requestRun();
+  assert.equal(submitted.validation_level, 'runtime');
+  assert.equal(submitted.sandbox, 'docker');
+  let created;
+  const model = {value: 'luna'}, templateReady = {value: true};
+  const newProject = loadDeclaration(consoleFile, 'createProject', {
+    busy: {value: false}, providerId: model, templateReady, templateId: {value: 'chosen-template'},
+    title: {value: 'Customer manager'}, requirement: {value: 'Manage customer contacts'},
+    guarded: fn => fn(), selection: 0, run: {value: null}, runs: {value: []}, events: {value: []},
+    acceptLimitations: {value: false}, project: {value: null}, createVisible: {value: true},
+    refreshBase: async () => {}, operation: {value: ''}, ElMessage: {warning() {}},
+    FactoryAPI: {createProject: async body => {created = body; return {id: 'new'};}, clarify: async () => ({id: 'new'})},
+  });
+  await newProject();
+  assert.equal(created.template_id, 'chosen-template');
+  created = undefined; templateReady.value = false;
+  await newProject(); assert.equal(created, undefined, 'Unavailable template must not submit');
+  templateReady.value = true; model.value = null;
+  await newProject(); assert.equal(created, undefined, 'Missing model must not submit');
+  console.log('PASS: navigation, answers, run guards, template submission, runtime parameters and honest quality labels');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from .config import Settings
-from .providers.sandbox import cube_verify, docker_verify
+from .providers.sandbox import cube_verify, docker_verify, docker_runtime_verify
 
 
 def execute_json(args: list[str], cwd: Path, timeout: int = 90) -> dict:
@@ -20,6 +20,28 @@ def execute_json(args: list[str], cwd: Path, timeout: int = 90) -> dict:
 def verify_product(product: Path, run_id: str, request: dict, settings: Settings) -> dict:
     from .evidence import source_digest, require_full_quality
     before = source_digest(product)
+    if request.get("validation_level", "source") == "runtime":
+        from .evidence import RUNTIME_CHECKS, YUDAO_RUNTIME_CHECKS, require_runtime_quality
+        from .providers.sandbox import RuntimeVerificationError
+        if request.get("sandbox") != "docker" or request.get("pipeline_mode", "core") != "core":
+            raise RuntimeVerificationError("运行验收需要 Docker 沙箱和 core 流水线。")
+        template_id = request.get('template_id', 'fastapiadmin-pg-v1')
+        required = RUNTIME_CHECKS
+        if template_id == 'yudao-cloud-mini-antd-v1':
+            from .providers.yudao_sandbox import docker_yudao_verify
+            sandbox = docker_yudao_verify(product, run_id, settings)
+            required = YUDAO_RUNTIME_CHECKS
+        else:
+            sandbox = docker_runtime_verify(product, run_id, settings)
+        report = {"validation_level": "runtime", "quality_level": "generated_crud_stack_verified",
+                  "production_ready": False, "sandbox": sandbox, "source_digest": before,
+                  "requested_sandbox": "docker", "pipeline_mode": "core", 'template_id': template_id}
+        report.update({key: sandbox["result"].get(key, "not_run") for key in required})
+        require_runtime_quality(report, source_digest(product))
+        return report
+    if request.get('template_id') == 'yudao-cloud-mini-antd-v1':
+        from .providers.sandbox import RuntimeVerificationError
+        raise RuntimeVerificationError('芋道模板需要 Docker 实际运行验收，请选择运行验收后重试。')
     full = request.get("pipeline_mode") == "full"
     report = {
         "quality_level": "scaffold_ready", "full_stack": "not_run", "production_ready": False,

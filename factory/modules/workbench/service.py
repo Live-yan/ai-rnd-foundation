@@ -7,7 +7,7 @@ from starlette.concurrency import run_in_threadpool
 from factory.clarifier import clarify
 from factory.config import Settings
 from factory.database import Database
-from factory.providers.llm import ModelGateway
+from factory.providers.llm import ModelGateway, ModelOutputError, ModelRequestError
 from factory.providers.registry import ProviderService
 from factory.security import safe_relative
 from .crud import Repository
@@ -40,7 +40,10 @@ class WorkbenchService:
         project = await run_in_threadpool(self.repo.get_project, owner, project_id)
         profile = await run_in_threadpool(self.providers.runtime, owner, provider_id)
         try:
-            result = await clarify(project["messages"], project.get("clarification"), profile, self.settings)
+            result = await clarify(project["messages"], project.get("clarification"), profile, self.settings,
+                                   template_id=project.get('template_id', 'fastapiadmin-pg-v1'))
+        except (ModelOutputError, ModelRequestError) as exc:
+            raise HTTPException(502, str(exc)) from None
         except Exception:
             # SDK error chains can include keys or URLs. Never expose raw exception text.
             raise HTTPException(502, "AI 需求澄清未完成，请检查模型连通性和结构化输出支持；未生成任何代码") from None
@@ -53,6 +56,8 @@ class WorkbenchService:
         profile = await run_in_threadpool(self.providers.runtime, owner, provider_id)
         try:
             return await ModelGateway(self.settings).ping(profile)
+        except (ModelOutputError, ModelRequestError) as exc:
+            raise HTTPException(502, str(exc)) from None
         except Exception:
             raise HTTPException(502, "模型测试失败：请检查模型 ID、API Key、Base URL、配额及 Azure API Version") from None
 

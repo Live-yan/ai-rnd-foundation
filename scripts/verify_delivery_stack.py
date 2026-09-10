@@ -7,12 +7,33 @@ stack. No dependency override or test identity header is accepted by the product
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import sys
+
+
+def verify_owner_update(client, path: str, item_id: int, headers: dict, entity, ids: dict) -> int:
+    examples = {"string": "updated acceptance", "text": "updated notes", "integer": 2, "number": 2.5,
+                "boolean": False, "date": "2026-09-10", "datetime": "2026-09-10T01:02:03"}
+    updates = {field.name: ids[field.references] if field.kind == "reference" else examples[field.kind]
+               for field in entity.fields}
+    response = client.patch(f"{path}/{item_id}", json=updates, headers=headers)
+    assert response.status_code == 200, "Owner update failed"
+    response = client.get(path, headers=headers)
+    assert response.status_code == 200, "Owner update readback failed"
+    row = next(item for item in response.json()["items"] if item["id"] == item_id)
+    for field in entity.fields:
+        actual, expected = row[field.name], updates[field.name]
+        if field.kind == "datetime":
+            # PostgreSQL may append its UTC offset to the same timestamp.
+            assert datetime.fromisoformat(actual).replace(tzinfo=None) == datetime.fromisoformat(expected), "Owner datetime update was not persisted"
+        else:
+            assert actual == expected, "Owner update was not persisted"
+    return 3
 
 
 def verify(root: Path) -> dict:
@@ -77,6 +98,7 @@ def verify(root: Path) -> dict:
             with engine.connect() as connection:
                 assert connection.execute(select(table.c.id).where(table.c.id == ids[name])).scalar_one() == ids[name]
             assertions += 8
+            assertions += verify_owner_update(client, path, ids[name], headers[0], entity, ids)
             if any(f.kind == "reference" for f in entity.fields):
                 assert client.post(path, json=payload, headers=headers[1]).status_code == 422
                 assertions += 1

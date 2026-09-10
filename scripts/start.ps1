@@ -1,6 +1,7 @@
-param(
+﻿param(
     [switch]$Fresh,
-    [switch]$NewEnv
+    [switch]$NewEnv,
+    [switch]$Tools
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,9 +27,14 @@ if ($LASTEXITCODE -ne 0) { throw "初始化失败。请安装 Python 或改在 W
 python scripts/setup_toolchain.py
 if ($LASTEXITCODE -ne 0) { throw "工具地址初始化失败，已有凭据未覆盖。" }
 
-docker compose config --quiet
+$compose = @("compose")
+if ($Tools) {
+    & (Join-Path $PSScriptRoot "../integrations/toolhive/start.ps1")
+    $compose += @("-f", "compose.yaml", "-f", "compose.tools.yaml", "--profile", "ai", "--profile", "tools", "--profile", "architecture")
+}
+& docker @compose config --quiet
 if ($LASTEXITCODE -ne 0) { throw "Compose 配置校验失败。" }
 
-docker compose up --build -d
+& docker @compose up --build -d
 if ($LASTEXITCODE -ne 0) { throw "Docker 构建或启动失败；查看输出与 docs/TROUBLESHOOTING.md。" }
 Write-Host "打开 http://localhost:8000/api/v1/web/，登录后访问 /api/v1/web/#/factory。"

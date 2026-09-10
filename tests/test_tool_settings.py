@@ -146,12 +146,12 @@ def test_unknown_tool_and_invalid_reset_revision(service):
 
 
 def test_non_admin_cannot_reset_or_read_secret_fields(storage, service):
-    save(service, 0, {'cube_api_key': 'private-fixture-key'})
+    service.save('serena', ToolSettingsInput(expected_revision=0, values={'serena_token': 'private-fixture-key'}))
     app = FastAPI()
     app.include_router(create_router(storage, service.defaults, lambda: 'reader', admin_dependency=lambda: False))
     with TestClient(app) as client:
-        assert client.delete('/factory/toolchain/cube/config?revision=1').status_code == 403
-        result = client.get('/factory/toolchain/cube/config').json()['data']
+        assert client.delete('/factory/toolchain/serena/config?revision=1').status_code == 403
+        result = client.get('/factory/toolchain/serena/config').json()['data']
         assert result['editable'] is False
         assert all(field['value'] is None for field in result['fields'])
         assert 'private-fixture-key' not in json.dumps(result)

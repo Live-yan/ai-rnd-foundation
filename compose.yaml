@@ -153,8 +153,8 @@ services:
     restart: "no"
   litellm:
     profiles: ["ai"]
-    # Mutable stable tag is explicitly recorded; pin a resolved digest after local verification.
-    image: ghcr.io/berriai/litellm:main-stable
+    # Locally verified Proxy/UI image; SDK version is separately pinned in pyproject.toml.
+    image: ghcr.io/berriai/litellm@sha256:a3715fa7ad8387941ab697259bd2881d68931657247a41984f90fae6d11c62bf
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     # Do not send the whole platform .env (JWT/credential key) to a gateway.
     environment:
@@ -175,6 +175,7 @@ services:
     command: ["local"]
     ports: ["127.0.0.1:8080:8080"]
     volumes: ["./architecture:/usr/local/structurizr"]
+    restart: unless-stopped
 volumes:
   postgres-data:
   postgres-socket:

@@ -23,7 +23,7 @@ def _package_product(product: Path, archive: Path, quality: dict) -> str:
     delivery = product / 'delivery'
     delivery.mkdir(exist_ok=True)
     (delivery / 'quality.json').write_text(json.dumps(quality, ensure_ascii=False, indent=2), encoding='utf-8')
-    inventory = {str(p.relative_to(product)): file_sha256(p) for p in files_for_package(product)
+    inventory = {p.relative_to(product).as_posix(): file_sha256(p) for p in files_for_package(product)
                  if p != delivery / 'files.sha256.json'}
     (delivery / 'files.sha256.json').write_text(json.dumps(inventory, indent=2, ensure_ascii=False), encoding='utf-8')
     archive.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +34,7 @@ def _package_product(product: Path, archive: Path, quality: dict) -> str:
                 rel = path.relative_to(product).as_posix()
                 info = ZipInfo(rel, date_time=(2026,9,8,0,0,0))
                 info.compress_type = ZIP_DEFLATED
-                info.external_attr = 0o100644 << 16
+                info.external_attr = (0o100755 if rel.endswith(('.sh', '.command')) else 0o100644) << 16
                 z.writestr(info, path.read_bytes())
         os.replace(temp, archive)
         return file_sha256(archive)

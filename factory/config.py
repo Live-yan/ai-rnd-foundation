@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://factory:change-me@localhost:5432/factory"
     data_dir: Path = ROOT / "data"
     upstream_dir: Path = ROOT / ".vendor" / "FastapiAdmin"
+    yudao_upstream_dir: Path = ROOT / '.vendor' / 'yudao'
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
     task_queue: str = "ai-rnd-v1"
@@ -18,6 +19,10 @@ class Settings(BaseSettings):
     credential_encryption_key: str = ""
     # Legacy/default LiteLLM proxy profile. UI-managed provider profiles take precedence.
     model_base_url: str = "http://localhost:4000/v1"
+    litellm_proxy_url: str = "http://litellm:4000"
+    structurizr_url: str = "http://structurizr:8080"
+    structurizr_mcp_url: str = ""
+    structurizr_mcp_token: str = ""
     model_api_key: str = ""
     model_name: str = "factory-planner"
     # Custom endpoints require an administrator-approved origin; paths remain configurable in the UI.
@@ -38,6 +43,7 @@ class Settings(BaseSettings):
     coder_factory_url: str = ""
     coder_import_timeout: int = 240
     public_url: str = "http://localhost:8000"
+    runtime_verifier_image: str = "ai-rnd-acceptance:local"
     verifier_image: str = "ai-rnd-verifier:0.1.0"
     docker_host_data_dir: str = ""
     openspec_required: bool = True

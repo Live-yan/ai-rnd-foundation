@@ -1,6 +1,9 @@
 {
   "id": "fastapiadmin-pg-v1",
   "name": "FastapiAdmin · Vue3 · PostgreSQL",
+  "description": "适合快速交付带登录、数据列表、表单和父子记录的管理系统。",
+  "suitable_for": ["设备与维护台账", "客户与联系人", "个人任务与记录"],
+  "example_requirement": "我需要一个客户与联系人管理系统。每个登录用户只能管理自己的客户，可以记录客户名称、联系电话和沟通日期，并为客户添加多条联系人记录。需要新增、查询、修改、删除和关联校验。",
   "upstream": "https://github.com/fastapiadmin/FastapiAdmin.git",
   "commit": "f7f5fb61a5c918016640f6b07e053c807381b7cc",
   "strategy": "fastapiadmin_crud_v1",

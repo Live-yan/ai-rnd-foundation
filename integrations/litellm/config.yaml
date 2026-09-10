@@ -1,6 +1,29 @@
 # Ready for the native Admin UI. No fake or preselected paid model.
 # Add models in /ui, or deliberately replace this file with the reviewed export.
 model_list: []
+# ToolHive is loopback-only on the Docker Desktop host. Never expose Serena directly.
+# Grant only the server IDs returned by /v1/mcp/server to each virtual key.
+mcp_servers:
+  serena:
+    alias: serena
+    url: http://host.docker.internal:9122/mcp
+    transport: http
+    auth_type: none
+    available_on_public_internet: false
+    allow_all_keys: false
+    allowed_tools:
+      - get_symbols_overview
+      - find_symbol
+      - search_for_pattern
+      - list_dir
+  structurizr:
+    alias: structurizr
+    url: http://structurizr-mcp:8080/mcp
+    transport: http
+    auth_type: none
+    available_on_public_internet: false
+    allow_all_keys: false
+    allowed_tools: [validate, parse, inspect, export-mermaid, export-plantuml, export-c4plantuml]
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 litellm_settings:

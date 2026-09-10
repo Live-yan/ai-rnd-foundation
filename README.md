@@ -1,10 +1,18 @@
 # AI 软件研发平台 · FastapiAdmin
 
-基于固定 FastapiAdmin 模板、uv、PostgreSQL、Vue3、LangGraph 与 Temporal 的规格驱动软件工厂。模型通过 LiteLLM profile 配置；网页工作台先澄清需求，再审阅规格/架构、批准、生成、验证并下载源码。
+面向非技术用户的模板交付工作台：选择模板、描述需求、确认范围、生成并验收、下载启动。复用 LiteLLM、LangGraph、Temporal 和模板原有能力。FastapiAdmin 与芋道 Cloud Mini + Vue3 Ant Design Vue 两套模板均已接入，并通过固定规格运行验收。
+
+**当前操作入口与能力边界：[从模板到可运行交付](docs/NO_CODE_DELIVERY.md)。** 默认运行验收实际构建前端并检查数据库、登录和 CRUD；“仅源码检查”单独标记。交付包新增启动器，自动分配端口并打开浏览器。
+
+## 当前工具范围
+
+CubeSandbox 和 Coder 已从工作台工具链、配置/探测入口和新任务选项移除。新任务使用 core 源码交付流程，可选 static / Docker 检查与 Serena；不再提供依赖这两项的 full 模式。历史记录、凭据和适配器仅保留兼容，不删除既有服务或数据。`--tools` 不再自动启动 Coder，遗留服务需显式 `--profile legacy-coder`。code-server 不受影响，尚未新增其自动源码导入能力。
+
+下方及早期验收文档中的 Cube/Coder 完整链路说明只供历史参考，不代表当前新任务入口仍支持。
 
 ## 当前入口
 
-优先阅读 **[联调前检查与部署](docs/INTEGRATION_ACCEPTANCE.md)**。该文档取代早期手册里固定 Demo、旧服务端口和仅源码检查的说明。
+新流程启动、Luna 模型配置和试用步骤优先阅读 **[从模板到可运行交付](docs/NO_CODE_DELIVERY.md)**；通用联调参考 [联调前检查与部署](docs/INTEGRATION_ACCEPTANCE.md)。
 
 ```bash
 python3 scripts/init_env.py
@@ -12,7 +20,11 @@ python3 scripts/setup_toolchain.py
 docker compose up --build -d
 ```
 
+以上为基础启动。测试新的实际运行验收需使用 `docker compose -f compose.yaml -f compose.runtime.yaml --profile ai up -d`，并预先准备运行验收镜像与芋道源码；当前开发机已完成准备，完整 PowerShell 命令见上述操作说明。
+
 Windows 用户在已启用 Docker Desktop WSL 集成的 Ubuntu 中执行。首次在线下载固定提交 `f7f5fb61a5c918016640f6b07e053c807381b7cc`，不追随上游 main。入口：`http://localhost:8000/api/v1/web/#/factory`。
+
+本机已准备 ToolHive/Serena 后，可运行 `powershell -File scripts/start.ps1 -Tools`（Linux：`bash scripts/start.sh --tools`）一并启动 LiteLLM 和官方 Structurizr MCP/查看页。该旧启动脚本不包含新运行验收 override；新流程使用上述专用命令。连接拓扑与实测证据见 **[本机连接记录](docs/LOCAL_CONNECTIONS.md)**。
 
 三个嵌入页面：研发工作台、模型/LiteLLM 配置、工具链配置。普通模型 API Key、云平台凭据和个人 ChatGPT/Codex 授权分开；由用户自己完成真实账号授权。
 
@@ -27,6 +39,7 @@ Actions 检查 Python 合同、前端构建/类型/四种视口、真实核心�
 ## 文档
 
 - [联调清单、各工具配置与服务地址](docs/INTEGRATION_ACCEPTANCE.md)
+- [本机 MCP 连接、真实模型与工作流实测](docs/LOCAL_CONNECTIONS.md)
 - [最后约束与全栈验收器](docs/FINAL_CONSTRAINTS.md)
 - [框架与 Agent 扩展](docs/EXTENDING.md)
 - [给编程 AI 的实施提示词](docs/AI_PROMPTS.md)

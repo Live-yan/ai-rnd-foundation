@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from .model import Database, Project, Run, Event, Outbox
 from factory.schemas import ApprovalInput, ClarificationResult, ProjectInput, RunInput
+from factory.templates import get_template
 
 def conversation_revision(messages: list[dict]) -> str:
     return hashlib.sha256(json.dumps(messages, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -26,6 +27,8 @@ def run_dict(run: Run) -> dict:
         "clarification": request.get("clarification"),
         "provider": request.get("provider") or ("profile" if request.get("provider_id") else "unknown"),
         "sandbox": request.get("sandbox", "static"),
+        "validation_level": request.get("validation_level", "source"),
+        "template_id": request.get("template_id", "fastapiadmin-pg-v1"),
         "pipeline_mode": request.get("pipeline_mode", "core"),
         "provision_coder": bool(request.get("provision_coder", False)),
         "download_available": run.status == "READY" and bool(run.artifact),
@@ -38,8 +41,10 @@ class Repository:
         self.db = db
 
     def create_project(self, owner: str, value: ProjectInput) -> dict:
-        if value.template_id != "fastapiadmin-pg-v1":
-            raise HTTPException(422, "This version implements only fastapiadmin-pg-v1")
+        try:
+            get_template(value.template_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
         with self.db.session() as session:
             p = Project(
                 id=str(uuid4()), owner_id=owner, title=value.title, template_id=value.template_id,
@@ -111,6 +116,7 @@ class Repository:
                 "role": "assistant", "kind": "clarification",
                 "content": result.understanding,
                 "questions": result.questions,
+                "question_choices": item["question_choices"],
                 "acceptance_criteria": result.acceptance_criteria,
                 "risks": result.risks,
             }
@@ -129,7 +135,9 @@ class Repository:
             with self.db.session() as session:
                 r = session.scalar(select(Run).where(Run.owner_id == owner, Run.idempotency_key == value.idempotency_key))
                 if r:
-                    same = r.project_id == project_id and all(r.request.get(k) == v for k, v in value.model_dump().items())
+                    same = r.project_id == project_id and all(
+                        r.request.get(k, 'source' if k == 'validation_level' else None) == v
+                        for k, v in value.model_dump().items())
                     if not same:
                         raise HTTPException(409, "Idempotency key was already used with a different request")
                     return run_dict(r)
@@ -150,10 +158,15 @@ class Repository:
                     raise HTTPException(409, "需求版本已改变，请刷新项目并审阅最新 AI 分析")
                 if not legacy_demo and p.clarification.get("conversation_revision") != current_revision:
                     raise HTTPException(409, "AI 分析缺少当前需求版本凭证，请重新澄清")
+                try:
+                    template = get_template(p.template_id)
+                except ValueError as exc:
+                    raise HTTPException(422, str(exc)) from None
                 request = value.model_dump() | {
                     "messages": p.messages,
                     "clarification_revision": conversation_revision(p.messages),
                     "template_id": p.template_id,
+                    "template_snapshot": template,
                     "clarification": p.clarification or ({"ready": True, "legacy_demo_fixture": True} if legacy_demo else None),
                     "clarification_provider_id": p.clarification_provider_id,
                 }
@@ -166,7 +179,7 @@ class Repository:
                 session.add(Outbox(run_id=r.id, kind="start"))
                 session.add(Event(
                     run_id=r.id, stage="temporal", tool="temporal",
-                    message="任务已持久化并写入 outbox，等待 Temporal dispatcher 启动完整工具链。",
+                    message="任务已持久化并写入 outbox，等待 Temporal dispatcher 启动研发流水线。",
                 ))
                 return run_dict(r)
         except IntegrityError:

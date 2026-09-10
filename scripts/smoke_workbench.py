@@ -14,13 +14,21 @@ from uuid import uuid4
 import httpx
 
 
+def require_luna(profile: dict) -> None:
+    model = str(profile.get('model', '')).rsplit('/', 1)[-1].replace('-', '')
+    if not profile.get('enabled') or model != 'gpt6luna':
+        raise RuntimeError('流程生成测试只允许已启用的 gpt6-luna / gpt-6-luna profile；未调用模型。')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument("--provider-id", required=True)
     parser.add_argument("--requirement", type=Path, required=True)
     parser.add_argument("--answers", type=Path, help="Optional JSON array of answers; otherwise ask in the terminal")
-    parser.add_argument("--full", action="store_true", help="Require all integrations, including Cube and verified Coder import")
+    parser.add_argument("--template-id", default="fastapiadmin-pg-v1")
+    parser.add_argument("--source-only", action="store_true", help="Explicitly skip runtime acceptance; this does not verify a runnable product")
+    parser.add_argument("--serena", action="store_true", help="Also test read-only MCP context in core mode")
     parser.add_argument("--approve", action="store_true", help="Explicitly approve the displayed specification")
     parser.add_argument("--accept-limitations", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("data/operator-acceptance"))
@@ -29,7 +37,7 @@ def main():
     if not token:
         raise SystemExit("Set FACTORY_USER_JWT to your local FastapiAdmin login JWT; do not paste it into an issue")
     answers = iter(json.loads(args.answers.read_text(encoding="utf-8"))) if args.answers else None
-    with httpx.Client(base_url=args.base_url.rstrip("/") + "/api/v1/factory/", timeout=210,
+    with httpx.Client(base_url=args.base_url.rstrip("/") + "/api/v1/factory/", timeout=410,
                       headers={"Authorization": "Bearer " + token}, follow_redirects=False) as client:
         def request(method, path, **kwargs):
             response = client.request(method, path, **kwargs)
@@ -39,8 +47,15 @@ def main():
             if data.get("code") != 0:
                 raise RuntimeError(f"{method} {path}: platform rejected the operation")
             return data["data"]
-        project = request("POST", "projects", json={"title": "Operator acceptance", "requirement": args.requirement.read_text(encoding="utf-8")})
+        def check_model():
+            profile = next((p for p in request('GET', 'providers') if p['id'] == args.provider_id), {})
+            require_luna(profile)
+            return {key: profile[key] for key in ('id', 'provider', 'model')}
+        model_receipt = check_model()
+        project = request("POST", "projects", json={"title": "Operator acceptance", "template_id": args.template_id,
+            "requirement": args.requirement.read_text(encoding="utf-8")})
         for _ in range(12):
+            check_model()
             project = request("POST", f'projects/{project["id"]}/clarify', json={"provider_id": args.provider_id})
             print(json.dumps(project["clarification"], ensure_ascii=False, indent=2))
             if project["clarification_status"] == "READY":
@@ -51,11 +66,13 @@ def main():
             request("POST", f'projects/{project["id"]}/messages', json={"content": answer})
         else:
             raise RuntimeError("Clarification remains unresolved; no generation task was created")
+        check_model()
         body = {"expected_revision": project["revision"], "provider_id": args.provider_id, "provider": "litellm", "idempotency_key": str(uuid4()),
-                "pipeline_mode": "full" if args.full else "core", "sandbox": "cube" if args.full else "static",
-                "use_serena": args.full, "provision_coder": args.full}
+                "pipeline_mode": "core", "sandbox": "static" if args.source_only else "docker",
+                "validation_level": "source" if args.source_only else "runtime",
+                "use_serena": args.serena, "provision_coder": False}
         run = request("POST", f'projects/{project["id"]}/runs', json=body)
-        deadline = time.monotonic() + 1800
+        deadline = time.monotonic() + (4800 if args.template_id == 'yudao-cloud-mini-antd-v1' else 1800)
         approved = False
         while time.monotonic() < deadline:
             run = request("GET", f'runs/{run["id"]}')
@@ -78,20 +95,15 @@ def main():
         sha = hashlib.sha256(response.content).hexdigest()
         if sha != run["artifact_sha256"]:
             raise RuntimeError("Downloaded source archive failed integrity verification")
-        if args.full:
-            checks, stages = run["checks"], run["stage_details"]
-            if not (checks.get("full_stack") == "passed" and checks.get("frontend_build") == "passed"
-                    and checks["sandbox"].get("scope") == "generated_crud_stack"
-                    and stages["context"].get("used") and stages["architecture"].get("c4_dsl") == "parser_validated"
-                    and checks["sandbox"].get("provider") == "cube"
-                    and checks["coder"].get("source_import") == "sha256_verified"
-                    and checks["coder"].get("source_sha256") == sha):
-                raise RuntimeError("Full toolchain receipt is incomplete")
+        if not args.source_only:
+            from factory.evidence import require_runtime_quality
+            require_runtime_quality(run['checks'])
         output = args.output / run["id"]
         output.mkdir(parents=True, exist_ok=False)
         (output / "product.zip").write_bytes(response.content)
         (output / "run-receipt.json").write_text(json.dumps(run, ensure_ascii=False, indent=2))
         (output / "events.json").write_text(json.dumps(request("GET", f'runs/{run["id"]}/events'), ensure_ascii=False, indent=2))
+        (output / 'model.json').write_text(json.dumps(model_receipt, indent=2), encoding='utf-8')
         print(f"Verified delivery written to {output}. Review full_stack and production_ready separately.")
 
 

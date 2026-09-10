@@ -12,7 +12,7 @@ from .artifacts import build_architecture, build_openspec
 from .config import Settings
 from .database import Database, Event, Run
 from .generator import generate_product
-from .evidence import source_digest, require_full_quality, require_full_delivery
+from .evidence import source_digest, require_full_quality, require_full_delivery, require_runtime_quality
 from .security import file_sha256
 from .handoff import issue_source_ticket
 from .packaging import package_product
@@ -24,6 +24,8 @@ from .schemas import ProjectSpec
 from .security import redact, run_path
 from .toolchain import validate_structurizr
 from .validation import verify_product
+from .templates import verify_template_snapshot
+from .templates import get_template
 
 
 class Activities:
@@ -64,13 +66,16 @@ class Activities:
     async def context_activity(self, run_id: str) -> dict:
         info = self.get(run_id)
         req = info["request"]
+        if req.get('template_id') == 'yudao-cloud-mini-antd-v1':
+            self.stage(run_id, 'context', 'CONTEXT_READY', '采用已锁定的芋道模板清单；该模板尚未配置 Serena 符号检索。', tool='template-catalog', detail={'used': False})
+            return {'context': str(get_template(req['template_id'])), 'provision_coder': False, 'template_id': req['template_id']}
         if not req.get("use_serena"):
             self.stage(run_id, "context", "CONTEXT_READY", "本次任务未请求 Serena 上下文。", tool="toolhive+serena", detail={"used": False})
-            return {"context": ""}
+            return {"context": "", "provision_coder": bool(req.get("provision_coder"))}
         self.stage(run_id, "context", "CONTEXT_LOADING", "通过 ToolHive 管理的只读 Serena MCP 读取 Golden Template 符号上下文。", tool="toolhive+serena")
         context = await SerenaClient(self.settings).template_context()
         self.stage(run_id, "context", "CONTEXT_READY", "Serena 模板上下文已读取并限制在 16 KiB 内。", tool="toolhive+serena", detail={"used": True, "chars": len(context)})
-        return {"context": context[:16000]}
+        return {"context": context[:16000], "provision_coder": bool(req.get("provision_coder"))}
 
     @activity.defn(name="rnd.plan")
     async def plan_activity(self, value: dict | str) -> dict:
@@ -85,6 +90,7 @@ class Activities:
         requirement = "\n\n".join(m.get("content", "") for m in req["messages"] if m.get("role") == "user")
         clarification = req.get("clarification") or {}
         requirement += "\n\n已确认的需求分析：\n" + str(clarification)
+        requirement += '\n\n所选模板：' + str(get_template(req.get('template_id', 'fastapiadmin-pg-v1')))
         if req.get("provider") == "demo" and not req.get("provider_id"):
             provider = "demo"
         else:
@@ -119,11 +125,12 @@ class Activities:
         root = run_path(self.settings.data_dir, run_id) / "analysis"
         self.stage(run_id, "openspec", "SPEC_PACK_BUILDING", "生成 OpenSpec proposal/design/tasks/spec 并执行 strict validate。", tool="openspec")
         root.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(build_openspec, root, spec, generated=False, clarification=info["request"].get("clarification"))
+        template_id = info['request'].get('template_id', 'fastapiadmin-pg-v1')
+        await asyncio.to_thread(build_openspec, root, spec, generated=False, clarification=info["request"].get("clarification"), template_id=template_id)
         openspec = await asyncio.to_thread(self._validate_openspec, root)
         self.stage(run_id, "openspec", "SPEC_PACK_READY", "OpenSpec 规格包已通过严格校验。", tool="openspec", detail=openspec)
         self.stage(run_id, "architecture", "ARCHITECTURE_BUILDING", "从同一 ProjectSpec 生成 Structurizr C4 DSL、ER 图和 mingrammer/diagrams 部署图。", tool="structurizr+diagrams")
-        architecture = await asyncio.to_thread(build_architecture, root, spec, diagrams_required=self.settings.diagrams_required)
+        architecture = await asyncio.to_thread(build_architecture, root, spec, diagrams_required=self.settings.diagrams_required, template_id=template_id)
         req = info["request"]
         if req.get("pipeline_mode") == "full":
             structurizr = await asyncio.to_thread(validate_structurizr, root, run_id, self.settings)
@@ -139,12 +146,18 @@ class Activities:
     @activity.defn(name="rnd.generate")
     async def generate_activity(self, run_id: str) -> dict:
         info = self.get(run_id)
-        self.stage(run_id, "generate", "GENERATING", "从固定 FastapiAdmin 模板生成后端扩展、迁移、Vue 页面和交付架构包。", tool="fastapiadmin+factory")
+        template = verify_template_snapshot(info['request'])
+        self.stage(run_id, "generate", "GENERATING", f"从固定 {template['name']} 模板生成前后端、数据库结构和交付包。", tool="template+factory")
         product = run_path(self.settings.data_dir, run_id) / "product"
-        result = await asyncio.to_thread(generate_product, ProjectSpec.model_validate(info["spec"]), self.settings.upstream_dir, product, diagrams_required=self.settings.diagrams_required)
+        generate, upstream = generate_product, self.settings.upstream_dir
+        if template['id'] == 'yudao-cloud-mini-antd-v1':
+            from .yudao import generate_yudao
+            generate, upstream = generate_yudao, self.settings.yudao_upstream_dir
+        result = await asyncio.to_thread(generate, ProjectSpec.model_validate(info["spec"]), upstream, product, diagrams_required=self.settings.diagrams_required)
+        verify_template_snapshot(info['request'], product)
         # Keep the approved requirements and parser receipt in the delivered source, not only the preview.
         await asyncio.to_thread(build_openspec, product, ProjectSpec.model_validate(info["spec"]),
-                                clarification=info["request"].get("clarification"))
+                                clarification=info["request"].get("clarification"), template_id=template['id'])
         analysis_dsl = run_path(self.settings.data_dir, run_id) / "analysis/architecture/workspace.dsl"
         architecture = info["stage_details"].get("architecture", {})
         if architecture.get("c4_dsl") == "parser_validated":
@@ -156,7 +169,7 @@ class Activities:
             receipt["architecture"]["c4_dsl"] = "parser_validated"
             receipt["architecture"]["structurizr"] = architecture["structurizr"]
             receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2))
-        self.stage(run_id, "generate", "GENERATED", "FastapiAdmin 产品源码已物化。", tool="fastapiadmin+factory", detail={"status": result.get("status")})
+        self.stage(run_id, "generate", "GENERATED", f"{template['name']} 产品源码已生成。", tool="template+factory", detail={"status": result.get("status")})
         return result
 
     @activity.defn(name="rnd.verify")
@@ -178,6 +191,8 @@ class Activities:
         base = run_path(self.settings.data_dir, run_id)
         if info["checks"].get("source_digest") != await asyncio.to_thread(source_digest, base / "product"):
             raise RuntimeError("Verified source changed before packaging; verification must be rerun")
+        if info["request"].get("validation_level") == "runtime":
+            require_runtime_quality(info["checks"], await asyncio.to_thread(source_digest, base / "product"))
         if info["request"].get("pipeline_mode") == "full":
             require_full_quality(info["checks"])
         sha = await asyncio.to_thread(package_product, base / "product", base / "product.zip", info["checks"])
@@ -223,6 +238,8 @@ class Activities:
                 raise RuntimeError("Delivery archive is missing")
             if file_sha256(artifact) != row.artifact_sha256:
                 raise RuntimeError("Delivery archive changed after packaging")
+            if row.request.get("validation_level") == "runtime":
+                require_runtime_quality(row.checks, source_digest(run_path(self.settings.data_dir, run_id) / "product"))
             if row.request.get("pipeline_mode") == "full":
                 require_full_delivery(row.checks, details, row.artifact_sha256)
             row.status = "READY"

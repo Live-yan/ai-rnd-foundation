@@ -6,6 +6,7 @@ root = Path(__file__).resolve().parents[1]
 env = root / '.env'
 if not env.exists():
     env.write_text('COMPOSE_PROJECT_NAME=product-' + secrets.token_hex(3) + '\n' +
+                   'PRODUCT_PORT=0\nPRODUCT_POSTGRES_PORT=0\nPRODUCT_REDIS_PORT=0\n' +
                    '\n'.join(f'{key}={secrets.token_hex(32)}' for key in
                              ['DATABASE_PASSWORD', 'REDIS_PASSWORD', 'SECRET_KEY']) + '\n', encoding='utf-8')
     env.chmod(0o600)
@@ -21,4 +22,4 @@ if not local.exists():
 frontend = root / 'frontend/web/.env.production'
 if not frontend.exists():
     frontend.write_text((root / 'frontend/web/.env.production.example').read_text())
-print('Initialized. Docker: docker compose up --build -d. Open http://localhost:8010/api/v1/web/#/business after login.')
+print('Initialized. Run the start launcher to build the app and open its assigned local address. Existing secrets are preserved.')

@@ -24,11 +24,23 @@ TOOL_DESCRIPTIONS = [
 ]
 
 
+# Browser consoles are distinct from in-process packages and external APIs.
+TOOL_ACCESS = {
+    "fastapiadmin": "console", "temporal": "console", "litellm": "console",
+    "structurizr": "console", "coder": "console",
+    "langgraph": "embedded", "openspec": "embedded", "diagrams": "embedded",
+    "toolhive": "external", "serena": "external", "cube": "external",
+}
+
+
 def _module(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
-def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
+RETIRED_TOOLS = frozenset({"cube", "coder"})
+
+
+def toolchain_status(settings: Settings, provider_count: int = 0, *, include_retired: bool = False) -> list[dict]:
     configured = {
         "fastapiadmin": settings.upstream_dir.joinpath("LICENSE").exists(),
         "langgraph": _module("langgraph"),
@@ -36,7 +48,7 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
         "temporal": _module("temporalio") and bool(settings.temporal_address),
         "openspec": bool(shutil.which("openspec")),
         "diagrams": _module("diagrams") and bool(shutil.which("dot")),
-        "structurizr": bool(shutil.which("docker") and settings.structurizr_image and settings.docker_host_data_dir),
+        "structurizr": bool(settings.structurizr_mcp_url or (shutil.which("docker") and settings.structurizr_image and settings.docker_host_data_dir)),
         "toolhive": bool(settings.serena_url),
         "serena": bool(settings.serena_url),
         "cube": bool(settings.cube_api_url and settings.cube_api_key and settings.cube_template),
@@ -49,7 +61,7 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
     }
     hints = {
         "litellm": "在“模型供应商”页创建并测试一个配置。",
-        "structurizr": "完整模式需要 worker Docker socket 和 FACTORY_DOCKER_HOST_DATA_DIR，用固定 Structurizr 镜像验证每次生成的 workspace.dsl。",
+        "structurizr": "优先配置 Structurizr MCP（可经 LiteLLM 网关）校验每次 workspace.dsl；未配置时才使用 Docker runner。",
         "toolhive": "按 integrations/toolhive/README.md 启动 ToolHive 代理。",
         "serena": "FACTORY_SERENA_URL 必须指向 ToolHive 管理的只读 Serena MCP。",
         "cube": "完整模式需 integrations/cube/Dockerfile.fullstack 对应模板（建议至少 6 GiB 内存）；固定离线验收会启动独立 PostgreSQL/Redis、构建前端并验证真实认证。源码检查模板不能完成完整模式。",
@@ -57,15 +69,17 @@ def toolchain_status(settings: Settings, provider_count: int = 0) -> list[dict]:
     }
     result = []
     for key, name, role in TOOL_DESCRIPTIONS:
+        if not include_retired and key in RETIRED_TOOLS:
+            continue
         result.append({
             "id": key, "name": name, "role": role, "configured": configured[key],
-            "execution": execution[key], "hint": hints.get(key, ""),
+            "execution": execution[key], "hint": hints.get(key, ""), "access": TOOL_ACCESS[key],
         })
     return result
 
 
 def require_full_toolchain(settings: Settings, *, owner: str, provider_count: int, sandbox: str, provision_coder: bool) -> None:
-    rows = {row["id"]: row for row in toolchain_status(settings, provider_count)}
+    rows = {row["id"]: row for row in toolchain_status(settings, provider_count, include_retired=True)}
     required = ["fastapiadmin", "langgraph", "litellm", "temporal", "openspec", "diagrams", "structurizr", "toolhive", "serena", "cube"]
     if sandbox != "cube":
         raise ValueError("完整工具链必须使用 CubeSandbox；Docker/static 仅用于基础模式")
@@ -82,11 +96,16 @@ def require_full_toolchain(settings: Settings, *, owner: str, provider_count: in
 
 def validate_structurizr(analysis_root: Path, run_id: str, settings: Settings) -> dict:
     run_id = str(UUID(run_id))
+    dsl_path = analysis_root / "architecture/workspace.dsl"
+    if not dsl_path.is_file():
+        raise RuntimeError("Generated Structurizr workspace.dsl is missing")
+    if settings.structurizr_mcp_url:
+        import asyncio
+        from .providers.mcp import validate_c4
+        return asyncio.run(validate_c4(settings, dsl_path.read_text(encoding="utf-8")))
     if not settings.docker_host_data_dir:
         raise RuntimeError("FACTORY_DOCKER_HOST_DATA_DIR is required for Structurizr validation")
     host_arch = Path(settings.docker_host_data_dir) / "runs" / run_id / "analysis" / "architecture"
-    if not analysis_root.joinpath("architecture/workspace.dsl").is_file():
-        raise RuntimeError("Generated Structurizr workspace.dsl is missing")
     if not host_arch.is_absolute() or "," in str(host_arch):
         raise RuntimeError("Structurizr requires an absolute Docker host-side path without commas")
     name = "rnd-c4-" + run_id

@@ -26,31 +26,33 @@ def dsl_quote(value: str) -> str:
     return '"' + value + '"'
 
 
-def c4_dsl(spec: ProjectSpec) -> str:
+def c4_dsl(spec: ProjectSpec, *, template_id: str = 'fastapiadmin-pg-v1') -> str:
+    java = template_id == 'yudao-cloud-mini-antd-v1'
+    template, api, database, runtime = ('YuDao Cloud Mini', 'Spring Boot / Java 17', 'MySQL', 'JDBC') if java else ('FastapiAdmin', 'FastAPI / Python', 'PostgreSQL', 'SQLAlchemy Core')
     # Use explicit property lines instead of positional optional arguments. This
     # keeps the generated DSL unambiguous and leaves all labels inside quotes.
     lines = ['workspace {', f'  name {dsl_quote(spec.title)}',
              '  description "Generated architecture description"', '  model {',
              '    user = person "User"',
              f'    product = softwareSystem {dsl_quote(spec.title)} {{',
-             '      description "FastapiAdmin-based generated product"',
+             f'      description "{template}-based generated product"',
              '      web = container "Web UI" {',
              '        description "Forms, lists and administration"',
              '        technology "Vue 3 / TypeScript"', '      }',
              '      api = container "Application API" {',
              '        description "Authentication and business endpoints"',
-             '        technology "FastAPI / Python"',
+             f'        technology "{api}"',
              '        auth = component "Authentication adapter" {',
              '          description "Reuses upstream JWT, Redis session and live user checks"',
-             '          technology "FastapiAdmin"', '        }']
+             f'          technology "{template}"', '        }']
     for entity in spec.entities:
         # Labels need not be unique in ProjectSpec, but C4 component names must be.
         lines += [f'        c_{entity.name} = component {dsl_quote(entity.label + " (" + entity.name + ")")} {{',
                   '          description "Typed owner-scoped CRUD"',
-                  '          technology "SQLAlchemy Core"', '        }']
+                  f'          technology "{runtime}"', '        }']
     lines += ['      }', '      db = container "Database" {',
               '        description "Admin and generated business data"',
-              '        technology "PostgreSQL"', '      }',
+              f'        technology "{database}"', '      }',
               '      redis = container "Session cache" {',
               '        description "Upstream sessions and caching"',
               '        technology "Redis"', '      }', '    }',
@@ -62,7 +64,7 @@ def c4_dsl(spec: ProjectSpec) -> str:
               '    auth -> redis "Checks session" "Redis protocol"']
     for entity in spec.entities:
         lines += [f'    c_{entity.name} -> auth "Requires identity"',
-                  f'    c_{entity.name} -> db "CRUD biz_{entity.name}" "SQL"']
+                  f'    c_{entity.name} -> db "CRUD {"rnd_biz_" if java else "biz_"}{entity.name}" "SQL"']
     lines += ['  }', '  views {', '    systemContext product "C1" {',
               '      include *', '      autoLayout lr', '    }',
               '    container product "C2" {', '      include *', '      autoLayout lr', '    }',
@@ -70,13 +72,15 @@ def c4_dsl(spec: ProjectSpec) -> str:
     return '\n'.join(lines) + '\n'
 
 
-def er_dot(spec: ProjectSpec) -> str:
+def er_dot(spec: ProjectSpec, *, template_id: str = 'fastapiadmin-pg-v1') -> str:
+    java = template_id == 'yudao-cloud-mini-antd-v1'
+    prefix = 'rnd_biz_' if java else 'biz_'
     lines = ['digraph ER {', '  graph [rankdir=LR, charset="UTF-8"];',
              '  node [shape=plain, fontname="sans-serif"];', '  edge [fontname="sans-serif"];']
     for entity in spec.entities:
-        fields = ['id : integer PK', 'owner_id : string (private scope)', 'created_at : timestamp'] + [
+        fields = (['id : bigint PK', 'tenant_id : bigint', 'owner_id : bigint (private scope)', 'created_at : timestamp', 'updated_at : timestamp'] if java else ['id : integer PK', 'owner_id : string (private scope)', 'created_at : timestamp']) + [
             f'{f.name} : {f.kind}' + (' NOT NULL' if f.required else ' NULL') for f in entity.fields]
-        label = '<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0"><TR><TD><B>biz_' + entity.name + '</B></TD></TR>'
+        label = '<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0"><TR><TD><B>' + prefix + entity.name + '</B></TD></TR>'
         label += ''.join(f'<TR><TD ALIGN="LEFT">{html.escape(field)}</TD></TR>' for field in fields) + '</TABLE>'
         lines.append(f'  {entity.name} [label=<{label}>];')
         for f in entity.fields:
@@ -85,11 +89,14 @@ def er_dot(spec: ProjectSpec) -> str:
     return '\n'.join(lines + ['}']) + '\n'
 
 
-def build_architecture(root: Path, spec: ProjectSpec, *, diagrams_required: bool = True) -> dict:
+def build_architecture(root: Path, spec: ProjectSpec, *, diagrams_required: bool = True,
+                       template_id: str = 'fastapiadmin-pg-v1') -> dict:
+    java = template_id == 'yudao-cloud-mini-antd-v1'
+    prefix = 'rnd_biz_' if java else 'biz_'
     output = root / 'architecture'
     output.mkdir(parents=True, exist_ok=True)
-    put(root, 'architecture/workspace.dsl', c4_dsl(spec))
-    put(root, 'architecture/er.dot', er_dot(spec))
+    put(root, 'architecture/workspace.dsl', c4_dsl(spec, template_id=template_id))
+    put(root, 'architecture/er.dot', er_dot(spec, template_id=template_id))
     result = {'c4_dsl': 'generated_not_parser_validated', 'er_source': 'approved_business_metadata_not_live_database'}
     if shutil.which('dot'):
         subprocess.run(['dot', '-Tsvg', str(output / 'er.dot'), '-o', str(output / 'er.svg')],
@@ -99,7 +106,9 @@ def build_architecture(root: Path, spec: ProjectSpec, *, diagrams_required: bool
         raise RuntimeError('Graphviz dot is required for ER export; install graphviz')
     mermaid = ['erDiagram']
     for e in spec.entities:
-        mermaid += [f'  biz_{e.name} {{', '    int id PK', '    string owner_id', '    datetime created_at']
+        mermaid += [f'  {prefix}{e.name} {{', '    int id PK', '    int owner_id' if java else '    string owner_id', '    datetime created_at']
+        if java:
+            mermaid += ['    int tenant_id', '    datetime updated_at']
         for f in e.fields:
             kind = {'reference': 'int', 'integer': 'int', 'number': 'float', 'text': 'string'}.get(f.kind, f.kind)
             mermaid.append(f'    {kind} {f.name}' + (' FK' if f.kind == 'reference' else ''))
@@ -107,13 +116,15 @@ def build_architecture(root: Path, spec: ProjectSpec, *, diagrams_required: bool
         for f in e.fields:
             if f.kind == 'reference':
                 parent = '||' if f.required else '|o'
-                mermaid.append(f'  biz_{f.references} {parent}--o{{ biz_{e.name} : {f.name}')
+                mermaid.append(f'  {prefix}{f.references} {parent}--o{{ {prefix}{e.name} : {f.name}')
     put(root, 'architecture/er.mmd', '\n'.join(mermaid) + '\n')
     dictionary = ['# 数据字典', '', '仅描述本次生成的 biz_ 业务表；不声称是线上数据库反射，也不包含上游管理表。', '']
     for e in spec.entities:
-        dictionary += [f'## biz_{e.name} / {e.label}', '', '|字段|类型|必填|引用|', '|---|---|---|---|',
-                       '|id|integer 主键|是|-|', '|owner_id|string(80)，服务端从登录身份写入|是|-|',
+        dictionary += [f'## {prefix}{e.name} / {e.label}', '', '|字段|类型|必填|引用|', '|---|---|---|---|',
+                       '|id|bigint 主键|是|-|' if java else '|id|integer 主键|是|-|', '|owner_id|' + ('bigint' if java else 'string(80)') + '，服务端从登录身份写入|是|-|',
                        '|created_at|timestamp，数据库默认时间|是|-|']
+        if java:
+            dictionary += ['|tenant_id|bigint，从登录租户写入|是|-|', '|updated_at|timestamp UTC|是|-|']
         dictionary += [f'|{f.name}|{f.kind}|{"是" if f.required else "否"}|{f.references or "-"}|' for f in e.fields]
         dictionary.append('')
     put(root, 'docs/DATA_DICTIONARY.md', '\n'.join(dictionary))
@@ -137,18 +148,20 @@ if __name__ == "__main__":
     from pathlib import Path
     render(Path(__file__).with_name("deployment"))
 '''
+    if java:
+        source = source.replace('PostgreSQL', 'MySQL').replace('Vue / FastAPI', 'Vue / Spring Boot')
     source = Path(__file__).with_name('diagram_assets.py').read_text() + '\n' + source
     put(root, 'architecture/deployment.py', source)
     try:
         from diagrams import Diagram
         from diagrams.onprem.client import Users
         from diagrams.onprem.compute import Server
-        from diagrams.onprem.database import PostgreSQL
+        from diagrams.onprem.database import PostgreSQL, MySQL
         from diagrams.onprem.inmemory import Redis
         with Diagram('Generated product deployment', filename=str(output / 'deployment'), outformat='svg', show=False):
-            user = Users('User'); web = Server('Vue / FastAPI')
+            user = Users('User'); web = Server('Vue / Spring Boot' if java else 'Vue / FastAPI')
             user >> web
-            web >> PostgreSQL('PostgreSQL')
+            web >> (MySQL('MySQL') if java else PostgreSQL('PostgreSQL'))
             web >> Redis('Sessions')
         embed_svg_images(output / 'deployment.svg')
         result['diagrams'] = 'rendered_portable_svg'
@@ -159,7 +172,8 @@ if __name__ == "__main__":
     return result
 
 
-def build_openspec(root: Path, spec: ProjectSpec, *, generated: bool = True, clarification: dict | None = None) -> None:
+def build_openspec(root: Path, spec: ProjectSpec, *, generated: bool = True, clarification: dict | None = None,
+                   template_id: str = 'fastapiadmin-pg-v1') -> None:
     put(root, 'openspec/config.yaml', 'schema: spec-driven\ncontext: |\n  FastapiAdmin, uv, PostgreSQL, Vue3.\n  Generate bounded CRUD, never claim unsupported business rules are complete.\n')
     base = 'openspec/changes/create-product'
     put(root, base + '/.openspec.yaml', f'schema: spec-driven\ncreated: {date.today().isoformat()}\n')
@@ -198,6 +212,15 @@ def build_openspec(root: Path, spec: ProjectSpec, *, generated: bool = True, cla
     put(root, 'docs/tasks.dag.json', json.dumps(tasks, indent=2, ensure_ascii=False))
 
     tasks_path = root / base / "tasks.md"
+    if template_id == 'yudao-cloud-mini-antd-v1':
+        for relative in ('openspec/config.yaml', base + '/proposal.md', base + '/design.md', base + '/tasks.md'):
+            path = root / relative
+            text = path.read_text(encoding='utf-8')
+            for old, new in [('FastapiAdmin', 'YuDao Cloud Mini'), ('PostgreSQL', 'MySQL'), ('SQLAlchemy', 'JDBC'),
+                             ('Alembic migrations', 'SQL initialization'), ('uv,', 'Java 17, Maven,'),
+                             ('generated Python', 'generated code'), ('biz_ tables', 'rnd_biz_ tables')]:
+                text = text.replace(old, new)
+            path.write_text(text, encoding='utf-8')
     if not generated:
         tasks_path.write_text(tasks_path.read_text(encoding="utf-8").replace("- [x]", "- [ ]"), encoding="utf-8")
     if clarification:

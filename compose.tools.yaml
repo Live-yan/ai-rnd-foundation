@@ -1,6 +1,24 @@
 # Optional tool UI; no KVM and no Docker socket granted by default.
-# Use: docker compose -f compose.yaml -f compose.tools.yaml --profile tools up -d coder
+# Legacy Coder only: docker compose -f compose.yaml -f compose.tools.yaml --profile legacy-coder up -d coder
 services:
+  # Official stateless MCP parser/exporter, no server mutation tools or host mounts.
+  structurizr-mcp:
+    image: structurizr/mcp@sha256:fc4ef98b7da925d62b08c71a90eb995a527fae30e2c04b39e3041f253c135539
+    entrypoint: ["java", "-Dserver.port=8080", "-jar", "/usr/local/structurizr-mcp.war"]
+    command: ["-dsl", "-mermaid", "-plantuml"]
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/tmp:rw,nosuid,size=128m"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    cpus: 1
+    pids_limit: 256
+    networks: [mcp]
+    profiles: ["ai"]
+    restart: unless-stopped
+  litellm:
+    networks: [default, mcp]
   coder:
     # Coder 2.37.1 already has ENTRYPOINT ["/opt/coder", "server"].
     # Do not append another "server" (it exits with unrecognized subcommand).
@@ -14,7 +32,10 @@ services:
     ports: ["127.0.0.1:7080:7080"]
     depends_on:
       tools-db-init: {condition: service_completed_successfully}
-    profiles: ["tools"]
+    profiles: ["legacy-coder"]
     restart: unless-stopped
+networks:
+  mcp:
+    internal: true
 volumes:
   coder_data:
