@@ -2,9 +2,9 @@
 # Use: docker compose -f compose.yaml -f compose.tools.yaml --profile tools up -d coder
 services:
   coder:
-    # Pin the verified digest for your deployment; latest is for local development.
-    image: ghcr.io/coder/coder:latest
-    command: ["server"]
+    # Coder 2.37.1 already has ENTRYPOINT ["/opt/coder", "server"].
+    # Do not append another "server" (it exits with unrecognized subcommand).
+    image: ghcr.io/coder/coder@sha256:0c6994bb4c5a02b821aab5b8c021a928de0b1cda55159462a1385ba3e4448e1e
     environment:
       CODER_PG_CONNECTION_URL: postgresql://factory:${POSTGRES_PASSWORD}@postgres:5432/coder?sslmode=disable
       CODER_ACCESS_URL: ${CODER_ACCESS_URL:-http://localhost:7080}
